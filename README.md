@@ -46,7 +46,7 @@ Before confirming, set the MD to receive: **GLOBAL > FILE > MACHINE MGR, pick a 
 
 | Source | How it is read |
 |---|---|
-| wftlrd.uk/machinedrum-usr | `manifest.json` (the page itself is JavaScript-only). Categories = banks, ordered by bank load order. |
+| wftlrd.uk/machinedrum-usr | `manifest.json` (the page itself is JavaScript-only). Categories = banks (in bank load order), then "Synths" (SYN-*) and "NFX effects" (NFX-*) for machines outside a bank. |
 | murdenihcam.github.io/murdenihcam-usr-machines | `machines.js` (JSON array). Prefers a `machines.json` if one is ever published. Each variant (all banks / ROM / E12) is a selectable file. |
 | moncalamari.github.io/dbx-usr-machines | page HTML for names + descriptions; .syx from each repo's latest GitHub release. |
 | github.com/bento909/MDX20-User-Machines | GitHub tree API; every folder with a .syx is a machine, description from the folder README. |

@@ -51,7 +51,14 @@ S[#S + 1] = {
     end
     local out = {}
     for _, x in ipairs(m.machines or {}) do
-      local cat = banks[x.bank] or (type(x.bank) == "string" and x.bank) or "Machines"
+      -- banked machines stay in their bank; the rest are grouped by name prefix
+      local code = tostring(x.code or x.id or "")
+      local cat = banks[x.bank] or (type(x.bank) == "string" and x.bank ~= "" and x.bank)
+      if not cat then
+        if code:match("^NFX%-") then cat = "NFX effects"
+        elseif code:match("^SYN%-") then cat = "Synths"
+        else cat = "Other" end
+      end
       local url = text.resolve(base, x.download) or
         (x.filename and text.resolve(base, "downloads/" .. x.filename))
       local extra = {}
@@ -65,7 +72,8 @@ S[#S + 1] = {
       out[#out + 1] = {
         name = x.code or x.id or "?", title = text.ascii(x.displayName or x.title or ""),
         category = cat, desc = text.clean(x.description or ""), version = x.version,
-        sort = (order[cat] or 99) * 1000 + (tonumber(x.loadOrder) or 999),
+        sort = (order[cat] or ({ ["Synths"] = 90, ["NFX effects"] = 91 })[cat] or 99) * 1000
+          + (tonumber(x.loadOrder) or 999),
         extra = extra, files = files,
       }
     end

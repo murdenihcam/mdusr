@@ -119,6 +119,8 @@ local MANIFEST = [[{"date":"2026-11-06","hardwareQualified":false,"target":"MDX 
  "machines":[
   {"code":"D11-CP","displayName":"DR110 CP PILOT","description":"Clap — noise bursts.","version":"1.0","bank":"dr110-quality-bank-v14","loadOrder":1,"filename":"D11-CP-v1.0.syx","download":"./downloads/D11-CP-v1.0.syx","bytes":1050},
   {"code":"D11-BD","displayName":"DR110 BD","description":"Bass drum.","version":"1.0","bank":"dr110-quality-bank-v14","loadOrder":2,"download":"./downloads/D11-BD-v1.0.syx"},
+  {"code":"NFX-WA","displayName":"WARP","description":"Warp effect.","version":"1.0","download":"./downloads/NFX-WA-v1.0.syx"},
+  {"code":"SYN-FM","displayName":"FM","description":"FM synth.","version":"1.0","bank":null,"download":"./downloads/SYN-FM-v1.0.syx"},
   {"code":"GM-AG","displayName":"GONG AGENG","description":"Large gong with &amp; long tail.","version":"1.0","bank":"gamelan-refinement-v3","loadOrder":1,"download":"./downloads/GM-AG-v1.0.syx"}
  ]}]]
 
@@ -294,9 +296,13 @@ local function count_index(id)
 end
 local logf = io.open(_path.data .. "mdusr/refresh.log")
 local logtxt = logf and logf:read("a") or ""
-check(logtxt:find("wftlrd: ok, 3 machines") and logtxt:find("refresh ok: 6 sources"), "refresh log written: " .. logtxt)
+check(logtxt:find("wftlrd: ok, 5 machines") and logtxt:find("refresh ok: 6 sources"), "refresh log written: " .. logtxt)
 local n, w = count_index("wftlrd")
-check(n == 3, "wftlrd: 3 machines (got " .. tostring(n) .. ")")
+check(n == 5, "wftlrd: 5 machines (got " .. tostring(n) .. ")")
+local wc = {}
+for _, m in ipairs(w and w.machines or {}) do wc[m.name] = m.category end
+check(wc["NFX-WA"] == "NFX effects" and wc["SYN-FM"] == "Synths", "wftlrd NFX/SYN categories")
+check(w and w.machines[#w.machines].name == "NFX-WA" and w.machines[#w.machines - 1].name == "SYN-FM", "banks first, then Synths, then NFX")
 check(w and w.machines[1].files[1].url == "https://wftlrd.uk/machinedrum-usr/downloads/D11-CP-v1.0.syx", "wftlrd url")
 check(w and w.machines[1].category == "DR-110" and w.machines[3].category == "Digital Gamelan", "wftlrd categories")
 check(w and w.machines[1].desc == "Clap - noise bursts.", "wftlrd desc ascii")
@@ -381,7 +387,7 @@ for _ = 1, 20 do enc(2, 1) end -- "Refresh all"
 key(3, 1)
 run_until(function() return #tasks <= 1 end, 600)
 local n6 = count_index("wftlrd")
-check(n6 == 3, "offline refresh keeps cached index")
+check(n6 == 5, "offline refresh keeps cached index")
 logtxt = io.open(_path.data .. "mdusr/refresh.log"):read("a")
 check(logtxt:find("wftlrd: FAILED") and logtxt:find("1 ok, 6 FAILED"), "failure summary logged")
 redraw()
