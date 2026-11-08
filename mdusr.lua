@@ -229,8 +229,10 @@ local function send_jobs(jobs)
   send.active, send.abort, send.done, send.total, send.result = true, false, 0, total, nil
   send.file, send.files, send.wait_next = 0, #jobs, false
   dirty = true
-  log(("send: %d file(s), %d B -> port %d (%s), chunk %d, %d B/s, gap %d ms"):format(#jobs, total, md_port,
-    tostring(port_name()), params:get("chunk"), params:get("rate"), params:get("gap")))
+  local whole = params:get("chunk_mode") == 1
+  log(("send: %d file(s), %d B -> port %d (%s), %s, %d B/s, gap %d ms"):format(#jobs, total, md_port,
+    tostring(port_name()), whole and "whole messages" or ("chunk " .. params:get("chunk")),
+    params:get("rate"), params:get("gap")))
   for _, j in ipairs(jobs) do
     log(("  %s: %d msgs, %d B, starts %s"):format(j.label, #j.msgs, j.bytes, hex(j.msgs[1], 12)))
   end
@@ -251,13 +253,18 @@ local function send_jobs(jobs)
     end
     if send.abort then break end
     local file_done = 0
+    local mid_msg = false
     for i, m in ipairs(j.msgs) do
       send.msg = i
-      for a = 1, #m, chunk do
+      -- default: each SysEx message goes out in one write (F0..F7 intact), so
+      -- MIDI routers / virtual ports that only pass complete messages work
+      local step = whole and #m or chunk
+      for a = 1, #m, step do
         if send.abort then break end
-        local b = math.min(a + chunk - 1, #m)
+        local b = math.min(a + step - 1, #m)
         local part = { table.unpack(m, a, b) }
         md:send(part)
+        mid_msg = part[#part] ~= 0xF7
         send.done = send.done + #part
         file_done = file_done + #part
         dirty = true
@@ -265,7 +272,7 @@ local function send_jobs(jobs)
       end
       if send.abort then
         -- never leave the MD inside an open SysEx: close it
-        if file_done < j.bytes then md:send({ 0xF7 }) end
+        if mid_msg then md:send({ 0xF7 }) end
         break
       end
       if i < #j.msgs and gap > 0 then clock.sleep(gap) end
@@ -1060,6 +1067,7 @@ function init()
   params:add_separator("mdusr")
   params:add_option("midi_port", "MIDI device", names, 1)
   params:set_action("midi_port", connect)
+  params:add_option("chunk_mode", "send as", { "whole messages", "chunks" }, 1)
   params:add_number("chunk", "chunk bytes", 16, 1024, 128)
   params:add_number("rate", "max bytes/sec", 200, 3125, 2500)
   params:add_number("gap", "gap between msgs ms", 0, 2000, 150)

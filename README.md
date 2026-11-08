@@ -60,7 +60,7 @@ Add more sites in `lib/sources.lua`. GitHub's unauthenticated API allows 60 requ
 
 ## Settings (PARAMETERS)
 
-- `chunk bytes` (128): bytes per MIDI write.
+- `send as` (whole messages): each SysEx message goes out in one MIDI write, F0..F7 intact, which MIDI routers and the norns `virtual` port need. `chunks` splits messages into `chunk bytes` (128) pieces instead.
 - `max bytes/sec` (2500): pacing; DIN MIDI tops out at 3125.
 - `gap between msgs ms` (150): pause between SysEx messages.
 - `request timeout s` (2): backup page wait per request.

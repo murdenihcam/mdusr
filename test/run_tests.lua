@@ -91,7 +91,9 @@ params.add_number = function(_, id, _, min, max, def) P[id] = { v = def } end
 local sent = {}         -- raw bytes sent to the MD
 local responder = nil   -- function(bytes) for simulated MD replies
 local dev = { name = "MD" }
+send_calls = 0
 function dev:send(t)
+  send_calls = send_calls + 1
   for _, b in ipairs(t) do sent[#sent + 1] = b end
   if responder then responder(t) end
 end
@@ -340,14 +342,15 @@ run_until(function() return #tasks <= 1 end, 30)
 redraw()
 check(table.concat(drawn, "|"):find("arm RECV"), "confirm screen shows receive reminder")
 check(table.concat(drawn, "|"):find("to 1: MD"), "confirm screen names the MIDI device")
-sent = {}
+sent = {}; send_calls = 0
 key(3, 1)                      -- send
 run_until(function() return #tasks <= 1 end, 60)
 redraw()
 check(bytes_str({ sent }) == USR_SYX, "sent bytes == file bytes (" .. #sent .. "/" .. #USR_SYX .. ")")
+check(send_calls == 3, "whole-message mode: one write per SysEx message (" .. send_calls .. ")")
 check(table.concat(drawn, "|"):find("SENT"), "result screen")
 local slog = io.open(_path.data .. "mdusr/mdusr.log"):read("a")
-check(slog:find("send: 1 file%(s%), 1080 B %-> port 1 %(MD%)") and slog:find("starts F0 00 20 3C") and slog:find("send done: 1080/1080 B written"), "send logged: " .. slog:sub(-400))
+check(slog:find("send: 1 file%(s%), 1080 B %-> port 1 %(MD%), whole messages") and slog:find("starts F0 00 20 3C") and slog:find("send done: 1080/1080 B written"), "send logged: " .. slog:sub(-400))
 key(2, 1)                      -- dismiss result
 -- pacing: 1053 bytes at 2500 B/s + 2 gaps of 0.15 s ~ 0.72 s minimum
 local t0 = now
