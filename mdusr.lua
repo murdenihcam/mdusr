@@ -27,6 +27,13 @@ local LOCAL = DATA .. "local/"
 
 local md -- midi device
 local md_port = 1
+rx_bytes, rx_last = 0, {} -- incoming MIDI counters, for the send log
+
+local function hex(t, n)
+  local o = {}
+  for i = 1, math.min(#t, n or 12) do o[i] = ("%02X"):format(t[i]) end
+  return table.concat(o, " ")
+end
 
 local function port_name()
   local v = midi.vports[md_port]
@@ -108,7 +115,7 @@ end
 local R = { active = false, state = {}, t0 = 0 }
 
 local function log(line)
-  local f = io.open(DATA .. "refresh.log", "a")
+  local f = io.open(DATA .. "mdusr.log", "a")
   if f then f:write(os.date("%Y-%m-%d %H:%M:%S ") .. line .. "\n"); f:close() end
   print("mdusr: " .. line)
 end
@@ -169,7 +176,7 @@ local function refresh(list)
     busy = nil
     R.active = false
     local summary = failn == 0 and ("refresh ok: %d sources"):format(okn)
-      or ("%d ok, %d FAILED (data/mdusr/refresh.log)"):format(okn, failn)
+      or ("%d ok, %d FAILED (data/mdusr/mdusr.log)"):format(okn, failn)
     log(summary .. (" in %.1fs"):format(util.time() - R.t0))
     say(summary, 5)
   end)
@@ -222,6 +229,12 @@ local function send_jobs(jobs)
   send.active, send.abort, send.done, send.total, send.result = true, false, 0, total, nil
   send.file, send.files, send.wait_next = 0, #jobs, false
   dirty = true
+  log(("send: %d file(s), %d B -> port %d (%s), chunk %d, %d B/s, gap %d ms"):format(#jobs, total, md_port,
+    tostring(port_name()), params:get("chunk"), params:get("rate"), params:get("gap")))
+  for _, j in ipairs(jobs) do
+    log(("  %s: %d msgs, %d B, starts %s"):format(j.label, #j.msgs, j.bytes, hex(j.msgs[1], 12)))
+  end
+  rx_bytes, rx_last = 0, {}
   local chunk = params:get("chunk")
   local gap = params:get("gap") / 1000
   for fi, j in ipairs(jobs) do
@@ -260,6 +273,13 @@ local function send_jobs(jobs)
     if send.abort then break end
   end
   send.result = send.abort and "aborted" or "done"
+  log(("send %s: %d/%d B written, %d B received from MD during send%s"):format(send.result, send.done, total,
+    rx_bytes, #rx_last > 0 and (" (" .. hex(rx_last, 24) .. ")") or ""))
+  clock.run(function()
+    local before = rx_bytes
+    clock.sleep(3)
+    if rx_bytes > before then log(("  MD sent %d B after the transfer: %s"):format(rx_bytes - before, hex(rx_last, 24))) end
+  end)
   send.sent_files = send.abort and (send.file - 1) or send.files
   send.active, send.wait_next = false, false
   dirty = true
@@ -401,7 +421,11 @@ end
 
 local asm = sysex.assembler(on_sysex)
 
-local function on_midi(data) asm.feed(data) end
+local function on_midi(data)
+  rx_bytes = rx_bytes + #data
+  if #rx_last < 24 then for _, b in ipairs(data) do if #rx_last < 24 then rx_last[#rx_last + 1] = b end end end
+  asm.feed(data)
+end
 
 local function capture_bytes()
   local n = 0

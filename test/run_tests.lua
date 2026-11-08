@@ -294,7 +294,7 @@ local function count_index(id)
   local t = json.decode(f:read("a")); f:close()
   return #t.machines, t
 end
-local logf = io.open(_path.data .. "mdusr/refresh.log")
+local logf = io.open(_path.data .. "mdusr/mdusr.log")
 local logtxt = logf and logf:read("a") or ""
 check(logtxt:find("wftlrd: ok, 5 machines") and logtxt:find("refresh ok: 6 sources"), "refresh log written: " .. logtxt)
 local n, w = count_index("wftlrd")
@@ -346,6 +346,8 @@ run_until(function() return #tasks <= 1 end, 60)
 redraw()
 check(bytes_str({ sent }) == USR_SYX, "sent bytes == file bytes (" .. #sent .. "/" .. #USR_SYX .. ")")
 check(table.concat(drawn, "|"):find("SENT"), "result screen")
+local slog = io.open(_path.data .. "mdusr/mdusr.log"):read("a")
+check(slog:find("send: 1 file%(s%), 1080 B %-> port 1 %(MD%)") and slog:find("starts F0 00 20 3C") and slog:find("send done: 1080/1080 B written"), "send logged: " .. slog:sub(-400))
 key(2, 1)                      -- dismiss result
 -- pacing: 1053 bytes at 2500 B/s + 2 gaps of 0.15 s ~ 0.72 s minimum
 local t0 = now
@@ -389,7 +391,7 @@ key(3, 1)
 run_until(function() return #tasks <= 1 end, 600)
 local n6 = count_index("wftlrd")
 check(n6 == 5, "offline refresh keeps cached index")
-logtxt = io.open(_path.data .. "mdusr/refresh.log"):read("a")
+logtxt = io.open(_path.data .. "mdusr/mdusr.log"):read("a")
 check(logtxt:find("wftlrd: FAILED") and logtxt:find("1 ok, 6 FAILED"), "failure summary logged")
 redraw()
 check(table.concat(drawn, "|"):find("!2 0m"), "error flag shown on source row: " .. table.concat(drawn, "|"))

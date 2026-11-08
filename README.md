@@ -54,7 +54,7 @@ Before confirming, set the MD to receive: **GLOBAL > FILE > MACHINE MGR, pick a 
 | MDX X.20 bundle (github.com/jmamma/MDX) | newest `firmware/mdx/X.20/*.zip` is downloaded once and unpacked on the norns (python3 or unzip). Files over 100 KB (the OS image) are never listed. Descriptions come only from `USR-Machines/README.txt` inside the zip. |
 | Local files | any .syx placed in `dust/data/mdusr/local/`. |
 
-Refresh fetches all sources in parallel. While it runs, each source row shows `queued`, `...` (fetching) or `FAIL`, and the bottom line counts finished sources and seconds. When it ends, a summary shows (`refresh ok: 6 sources` or `4 ok, 2 FAILED`). Each run is logged with per-source machine counts, timings and errors to `dust/data/mdusr/refresh.log` (also printed in maiden). The first refresh is the slowest: it downloads the 1.2 MB MDX X.20 zip once; later refreshes reuse it. Downloads run as background processes, so the norns stays responsive.
+Refresh fetches all sources in parallel. While it runs, each source row shows `queued`, `...` (fetching) or `FAIL`, and the bottom line counts finished sources and seconds. When it ends, a summary shows (`refresh ok: 6 sources` or `4 ok, 2 FAILED`). Each run is logged with per-source machine counts, timings and errors to `dust/data/mdusr/mdusr.log` (also printed in maiden). The first refresh is the slowest: it downloads the 1.2 MB MDX X.20 zip once; later refreshes reuse it. Downloads run as background processes, so the norns stays responsive.
 
 Add more sites in `lib/sources.lua`. GitHub's unauthenticated API allows 60 requests per hour; one full refresh uses about 5.
 
@@ -83,7 +83,7 @@ Incoming SysEx is reassembled across MIDI callbacks; realtime bytes (clock) insi
 - `dust/data/mdusr/backups/`: saved dumps.
 - `dust/data/mdusr/local/`: your own .syx files.
 - `dust/data/mdusr/collection.json`: the collection.
-- `dust/data/mdusr/refresh.log`: refresh history and errors.
+- `dust/data/mdusr/mdusr.log`: refresh history, errors, and a record of every send (device, bytes, first bytes, anything the MD sent back).
 
 ## Tests
 
