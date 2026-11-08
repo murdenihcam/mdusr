@@ -255,7 +255,7 @@ local function kitbasher_include(file)
 end
 S[#S + 1] = {
   id = "kitbasher",
-  name = "Kitbasher",
+  name = "kitbasher MDS",
   home = "https://kitbasher.xyz/mds",
   include = kitbasher_include,
   load = function(env)
@@ -380,10 +380,12 @@ S[#S + 1] = {
     for i, z in ipairs(syx) do
       local fname = text.basename(z.name)
       local stem = fname:gsub("%.[Ss][Yy][Xx]$", "")
-      local short = stem:match("^(%u+%-%w+)") or stem
+      -- full machine name (e.g. P-I-HP), only a trailing version is dropped
+      local short = stem:gsub("[%-_ ]+[vV]?%d+[%d%._]*[%a]?$", "")
+      if short == "" then short = stem end
       local pre = short:match("^(%u+)%-")
       out[#out + 1] = {
-        name = short, title = (stem ~= short) and stem or "",
+        name = short, title = "",
         category = PREFIX_CAT[pre] or "MDX bundle",
         desc = readme_entry(readme, stem) or readme_entry(readme, short)
           or ("Bundled with " .. zipname:gsub("%.zip$", "")),

@@ -17,7 +17,7 @@ PARAMETERS > EDIT: pick the MIDI device the MD is connected to (in and out).
 |---|---|---|
 | E1 | page | page |
 | E2 | scroll list / description | scroll menu |
-| E3 | machine list: right = add to collection, left = remove; detail: choose file variant; collection: move file up/down | change kit / pattern / song / global number |
+| E3 | machine list and info screen: right = add to collection, left = remove; collection: move file up/down | change kit / pattern / song / global number |
 | K2 | back, cancel, abort send | back, abort |
 | K3 | open, prepare, confirm send | run selected item |
 
@@ -25,7 +25,7 @@ LOAD flow: source → category (skipped when a source has only one) → machine 
 
 ## Collection (batch send)
 
-In any machine list, turn E3 right to check a machine off (marked `*`), left to uncheck. The file added is the variant last chosen with E3 in that machine's detail view (default: the first). Machines from different sources can be mixed. The collection is saved between sessions.
+Every .syx gets its own row in machine lists (machines with several variants, like SMP-SL / SMP-SM / SMP-SN, show one row per variant). In any machine list or on an info screen, turn E3 right to check a machine off (marked `*`), left to uncheck. Machines from different sources can be mixed. The collection is saved between sessions.
 
 **> Collection** (top of the source list) shows the files in send order:
 - **> Send all**: downloads anything not cached, validates every file, shows one confirm screen (files, messages, bytes, estimated time), then sends them in order with one progress bar.
@@ -44,7 +44,7 @@ Before confirming, set the MD to receive: **GLOBAL > FILE > MACHINE MGR, pick a 
 | murdenihcam.github.io/murdenihcam-usr-machines | `machines.js` (JSON array). Prefers a `machines.json` if one is ever published. Each variant (all banks / ROM / E12) is a selectable file. |
 | moncalamari.github.io/dbx-usr-machines | page HTML for names + descriptions; .syx from each repo's latest GitHub release. |
 | github.com/bento909/MDX20-User-Machines | GitHub tree API; every folder with a .syx is a machine, description from the folder README. |
-| Kitbasher (kitbasher.xyz/mds) | `mds/catalog.json` in github.com/etcetc000/kitbasher. Lists `mds/tx6` and `mds/community/*`; skips `mds/core` (the MDX built-ins) and `community/murdenihcam` (its own source). Summary, author, hardware, licence and notes shown. |
+| kitbasher MDS (kitbasher.xyz/mds) | `mds/catalog.json` in github.com/etcetc000/kitbasher. Lists `mds/tx6` and `mds/community/*`; skips `mds/core` (the MDX built-ins) and `community/murdenihcam` (its own source). Summary, author, hardware, licence and notes shown. |
 | MDX X.20 bundle (github.com/jmamma/MDX) | newest `firmware/mdx/X.20/*.zip` is downloaded once and unpacked on the norns (python3 or unzip). Files over 100 KB (the OS image) are never listed. Descriptions come only from `USR-Machines/README.txt` inside the zip. |
 | Local files | any .syx placed in `dust/data/mdusr/local/`. |
 
@@ -59,7 +59,7 @@ Add more sites in `lib/sources.lua`. GitHub's unauthenticated API allows 60 requ
 - `gap between msgs ms` (150): pause between SysEx messages.
 - `request timeout s` (2): backup page wait per request.
 - `between files` (auto gap / wait for K3) and `gap between files ms` (1500): batch sends.
-- `refresh on start`: if empty / always / never.
+- `refresh on start`: new sources (fetch any source never fetched before) / always / never.
 
 ## BACKUP page
 

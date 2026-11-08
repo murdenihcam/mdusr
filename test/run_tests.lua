@@ -163,6 +163,8 @@ os.execute("mkdir -p " .. zipdir .. "USR-Machines")
 local function wr(p, s) local f = assert(io.open(p, "wb")); f:write(s); f:close() end
 wr(zipdir .. "USR-Machines/FMX-B1.syx", USR_SYX)
 wr(zipdir .. "USR-Machines/PLK-01.syx", USR_SYX)
+wr(zipdir .. "USR-Machines/P-I-HP-v1.0.syx", USR_SYX)
+wr(zipdir .. "USR-Machines/P-I-KS.syx", USR_SYX)
 wr(zipdir .. "Machinedrum_SPS1-UW_OS_X.20_C.syx", string.rep("\xF0\x01\xF7", 60000))
 wr(zipdir .. "Machinedrum_SPS1-UW_OS-X.20_readme.txt", "OS notes\n\nFMX-B1 was renamed in this OS build, see the changelog for details.\n")
 wr(zipdir .. "USR-Machines/README.txt", "Bundled user machines\n---------------------\n\n  FMX-B1.syx : two-operator FM bass with feedback.\n  PLK-01.syx\n      Karplus plucked string with damping control.\n")
@@ -290,7 +292,7 @@ local function count_index(id)
 end
 local logf = io.open(_path.data .. "mdusr/refresh.log")
 local logtxt = logf and logf:read("a") or ""
-check(logtxt:find("wftlrd: ok, 3 machines") and logtxt:find("refresh ok: 7 sources"), "refresh log written: " .. logtxt)
+check(logtxt:find("wftlrd: ok, 3 machines") and logtxt:find("refresh ok: 6 sources"), "refresh log written: " .. logtxt)
 local n, w = count_index("wftlrd")
 check(n == 3, "wftlrd: 3 machines (got " .. tostring(n) .. ")")
 check(w and w.machines[1].files[1].url == "https://wftlrd.uk/machinedrum-usr/downloads/D11-CP-v1.0.syx", "wftlrd url")
@@ -313,10 +315,11 @@ check(kb and kb.machines[1].name == "TX6-BD" and kb.machines[1].category == "TX6
 check(kb and kb.machines[2].category == "Community: SamplesAndSnacks" and kb.machines[2].desc == "Blown trill", "kitbasher community entry")
 check(kb and kb.machines[1].files[1].url == "https://raw.githubusercontent.com/etcetc000/kitbasher/main/mds/tx6/bd/bd.syx", "kitbasher raw url")
 local n5, mx = count_index("mdx")
-check(n5 == 2, "mdx: firmware image hidden, 2 machines (got " .. tostring(n5) .. ")")
+check(n5 == 4, "mdx: firmware image hidden, 4 machines (got " .. tostring(n5) .. ")")
 check(mx and mx.machines[1].category == "MDX bundle", "mdx category")
+check(mx and mx.machines[2].name == "P-I-HP" and mx.machines[3].name == "P-I-KS", "mdx full names, version dropped: " .. tostring(mx and mx.machines[2].name))
 check(mx and mx.machines[1].desc == "two-operator FM bass with feedback.", "mdx desc same line: " .. tostring(mx and mx.machines[1].desc))
-check(mx and mx.machines[2].desc == "Karplus plucked string with damping control.", "mdx desc next line: " .. tostring(mx and mx.machines[2].desc))
+check(mx and mx.machines[4].desc == "Karplus plucked string with damping control.", "mdx desc next line: " .. tostring(mx and mx.machines[4].desc))
 
 -- browse wftlrd -> DR-110 -> D11-CP -> send
 enc(2, 1); key(3, 1); redraw() -- enter wftlrd (sources item 2, after Collection)
@@ -430,6 +433,24 @@ sent = {}
 key(3, 1)
 run_until(function() return #tasks <= 1 end, 3000)
 check(bytes_str({ sent }) == data, "restore sends file bytes exactly")
+
+-------------------------------------------------------------------- variant rows
+do
+  enc(1, -1)
+  for _ = 1, 5 do key(2, 1) end; for _ = 1, 20 do enc(2, -1) end
+  for i, src in ipairs(sources) do if src.id == "murdenihcam" then for _ = 1, i do enc(2, 1) end end end
+  key(3, 1)                 -- murdenihcam -> categories
+  enc(2, 1); key(3, 1)      -- Samplers
+  redraw()
+  local sc = table.concat(drawn, "|")
+  check(sc:find("SMP%-SL") and sc:find("SMP%-SN") and sc:find("E3 %+coll"), "each variant is its own row + E3 hint: " .. sc)
+  enc(2, 1); key(3, 1); redraw()  -- SMP-SN detail
+  sc = table.concat(drawn, "|")
+  check(sc:find("Variant of SMP%-SL") and sc:find("E3> collect"), "variant detail + hint")
+  enc(3, 1); redraw()
+  check(table.concat(drawn, "|"):find("%* E3< remove"), "E3 in detail adds to collection")
+  enc(3, -1)
+end
 
 -------------------------------------------------------------------- collection
 enc(1, -1) -- back to LOAD

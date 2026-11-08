@@ -167,10 +167,24 @@ local function categories(sid)
   return cats
 end
 
+-- one row per .syx file: machines with several variants get a row each
+local function variant_name(f)
+  local n = (f.label or f.filename or "?"):gsub("%s*%(.*$", ""):gsub("%.[Ss][Yy][Xx]$", "")
+  return n
+end
+
 local function machines_in(sid, cat)
   local out = {}
   for _, m in ipairs((idx[sid] or {}).machines or {}) do
-    if cat == nil or m.category == cat then out[#out + 1] = m end
+    if cat == nil or m.category == cat then
+      if #(m.files or {}) <= 1 then
+        out[#out + 1] = { m = m, fi = 1, name = m.name }
+      else
+        for fi, f in ipairs(m.files) do
+          out[#out + 1] = { m = m, fi = fi, name = variant_name(f) }
+        end
+      end
+    end
   end
   return out
 end
@@ -318,11 +332,8 @@ local function coll_load()
   C.items = type(t) == "table" and t or {}
 end
 
--- file currently chosen for a machine (variant picked in its detail view)
-local function chosen_file(m) return m.files[m._file or 1] end
-
-local function coll_set(sid, m, on)
-  local f = chosen_file(m)
+local function coll_set(sid, m, fi, on)
+  local f = m.files[fi]
   if not f then return say("no .syx for " .. m.name) end
   local key = coll_key(sid, f)
   local i = coll_find(key)
@@ -336,11 +347,9 @@ local function coll_set(sid, m, on)
   coll_save()
 end
 
-local function machine_collected(sid, m)
-  for _, f in ipairs(m.files or {}) do
-    if coll_find(coll_key(sid, f)) then return true end
-  end
-  return false
+local function row_collected(sid, row)
+  local f = row.m.files[row.fi]
+  return f and coll_find(coll_key(sid, f)) ~= nil
 end
 
 local function prepare_collection()
@@ -555,8 +564,8 @@ function key(n, z)
           L.sel.machines = 1
         end
       elseif L.level == "machines" then
-        local m = items[L.sel.machines]
-        if m then L.machine = m; L.level = "detail"; L.scroll = 0; L.file = m._file or 1 end
+        local row = items[L.sel.machines]
+        if row then L.machine = row.m; L.row = row; L.level = "detail"; L.scroll = 0; L.file = row.fi end
       elseif L.level == "detail" then
         local f = L.machine.files[L.file]
         if f then prepare_file(L.sid, f, "detail") else say("no .syx for this machine") end
@@ -604,13 +613,13 @@ function enc(n, d)
     if L.level == "detail" then
       if n == 2 then L.scroll = math.max(0, L.scroll + d)
       elseif n == 3 then
-        L.file = util.clamp(L.file + d, 1, math.max(1, #L.machine.files))
-        L.machine._file = L.file
+        -- E3 right = add this file to the collection, left = remove
+        coll_set(L.sid, L.machine, L.file, d > 0)
       end
     elseif n == 3 and L.level == "machines" then
       -- E3 right = add to collection, left = remove
-      local m = load_items()[L.sel.machines]
-      if m then coll_set(L.sid, m, d > 0) end
+      local row = load_items()[L.sel.machines]
+      if row then coll_set(L.sid, row.m, row.fi, d > 0) end
     elseif n == 3 and L.level == "collection" then
       -- E3 moves the selected file up/down in the send order
       local i = L.sel.collection - 2
@@ -784,7 +793,7 @@ local function draw_load()
       return c, tostring(#machines_in(L.sid, c))
     end)
   elseif L.level == "machines" then
-    header(L.cat or L.sname, "1/2")
+    header(L.cat or L.sname, "E3 +coll")
     local items = load_items()
     if #items == 0 then
       screen.level(6); screen.move(0, 24); screen.text("nothing cached")
@@ -792,9 +801,10 @@ local function draw_load()
       local x = idx[L.sid]
       if x and x.error then screen.move(0, 44); screen.text(fit(x.error, 128)) end
     else
-      draw_list(items, L.sel.machines, function(m)
-        local mark = machine_collected(L.sid, m) and "* " or "  "
-        return mark .. m.name, m.version and tostring(m.version):sub(1, 6) or nil
+      draw_list(items, L.sel.machines, function(row)
+        local mark = row_collected(L.sid, row) and "* " or "  "
+        local v = row.m.version
+        return mark .. row.name, v and tostring(v):sub(1, 6) or nil
       end)
     end
   elseif L.level == "collection" then
@@ -806,15 +816,18 @@ local function draw_load()
     end)
   elseif L.level == "detail" then
     local m = L.machine
-    header(m.name, m.version and tostring(m.version) or nil)
+    local f = m.files[L.file]
+    local rowname = L.row and L.row.name or m.name
+    header(rowname, m.version and tostring(m.version) or nil)
     local body = {}
+    if rowname ~= m.name then body[#body + 1] = "Variant of " .. m.name end
+    if f and #m.files > 1 then body[#body + 1] = "File: " .. text.ascii(f.label) end
     if m.title and m.title ~= "" and m.title ~= m.name then body[#body + 1] = m.title end
     for _, l in ipairs(text.wrap(text.ascii(m.desc or ""), 124, measure)) do body[#body + 1] = l end
     for _, e in ipairs(m.extra or {}) do
       for _, l in ipairs(text.wrap(text.ascii(e), 124, measure)) do body[#body + 1] = l end
     end
-    local f = m.files[L.file]
-    if f and f.scope then body[#body + 1] = "File: " .. f.scope end
+    if f and f.scope then body[#body + 1] = "Scope: " .. f.scope end
     L.scroll = math.min(L.scroll, math.max(0, #body - 5))
     screen.level(10)
     for r = 1, 5 do
@@ -825,10 +838,9 @@ local function draw_load()
     screen.level(15)
     screen.move(0, 63)
     if f then
-      local mark = coll_find(coll_key(L.sid, f)) and "* " or ""
-      local lab = mark .. (#m.files > 1 and (L.file .. "/" .. #m.files .. " ") or "") .. f.label
-      screen.text(fit(lab, 104))
-      screen.move(W, 63); screen.text_right("K3")
+      local inc = coll_find(coll_key(L.sid, f)) ~= nil
+      screen.text(inc and "* E3< remove" or "E3> collect")
+      screen.move(W, 63); screen.text_right("K3 send")
     else
       screen.text("no .syx found")
     end
@@ -901,7 +913,7 @@ function init()
   params:add_number("req_timeout", "request timeout s", 1, 10, 2)
   params:add_option("between", "between files", { "auto gap", "wait for K3" }, 1)
   params:add_number("file_gap", "gap between files ms", 0, 10000, 1500)
-  params:add_option("autorefresh", "refresh on start", { "if empty", "always", "never" }, 1)
+  params:add_option("autorefresh", "refresh on start", { "new sources", "always", "never" }, 1)
   params:read()
   params:bang()
 
@@ -909,9 +921,14 @@ function init()
   load_cache()
   coll_load()
   local mode = params:get("autorefresh")
-  local empty = true
-  for _, s in ipairs(sources) do if idx[s.id] and #(idx[s.id].machines or {}) > 0 then empty = false end end
-  if mode == 2 or (mode == 1 and empty) then refresh(source_list()) end
+  if mode == 2 then
+    refresh(source_list())
+  elseif mode == 1 then
+    -- fetch any source that has never been fetched (e.g. one added in an update)
+    local missing = {}
+    for _, s in ipairs(sources) do if not idx[s.id] then missing[#missing + 1] = s end end
+    if #missing > 0 then refresh(missing) end
+  end
 
   clock.run(function()
     while true do
