@@ -554,11 +554,17 @@ do
   key(3, 1)
   run_until(function() return false end, 3)
   redraw()
-  check(table.concat(drawn, "|"):find("restart mdusr"), "update pulled")
+  local sc2 = table.concat(drawn, "|")
+check(sc2:find("Restart needed") and sc2:find("Restart norns now") and sc2:find("Later"), "restart prompt after update: " .. sc2)
+local reset_called = false
+norns = { reset = function() reset_called = true end }
+key(3, 1)
+check(reset_called, "Restart norns now calls norns.reset")
+norns = nil
   local f = io.open(G .. "code/mdusr/f"):read("a")
   check(f == "a\nb\n", "working copy updated by git pull")
   key(2, 1); redraw()
-  check(not table.concat(drawn, "|"):find("checking"), "K2 leaves splash")
+  check(not table.concat(drawn, "|"):find("Restart norns now"), "K2 leaves splash")
 end
 
 print(("%d passed, %d failed"):format(passes, fails))

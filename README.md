@@ -13,7 +13,7 @@ PARAMETERS > EDIT: pick the MIDI device the MD is connected to (in and out).
 
 ## Start screen and updates
 
-On start a splash screen checks github.com/murdenihcam/mdusr for new commits (`git fetch` in the script folder). If the script is behind, the splash stays up with **Update script (N new)**: K3 runs `git pull --ff-only` and reloads the script. Otherwise it shows "up to date" (or "offline") and moves on by itself after about a second. The splash also offers **Refresh machine lists** and **Continue**; K2 skips it.
+On start a splash screen checks github.com/murdenihcam/mdusr for new commits (`git fetch` in the script folder). If the script is behind, the splash stays up with **Update script (N new)**: K3 runs `git pull --ff-only`, then asks to restart the norns (the new code only loads after a restart): **Restart norns now** (same as SYSTEM > RESET) or **Later**. Otherwise it shows "up to date" (or "offline") and moves on by itself after about a second. The splash also offers **Refresh machine lists** and **Continue**; K2 skips it.
 
 Updating in place needs a git install (`;install https://github.com/murdenihcam/mdusr` in maiden). A copy made by hand shows "not a git install" and must be updated by hand. If a pull fails (for example after local edits to the script files), the splash says so and the details print in maiden.
 

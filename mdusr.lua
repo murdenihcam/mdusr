@@ -536,6 +536,9 @@ end
 
 local function splash_items()
   local items = {}
+  if SPL.state == "updated" then
+    return { { id = "restart", label = "Restart norns now" }, { id = "go", label = "Later (old version runs)" } }
+  end
   if SPL.state == "behind" then items[#items + 1] = { id = "update", label = ("Update script (%d new)"):format(SPL.behind) } end
   items[#items + 1] = { id = "refresh", label = "Refresh machine lists" }
   items[#items + 1] = { id = "go", label = "Continue" }
@@ -569,14 +572,8 @@ local function do_update()
   dirty = true
   local out = net.run(("cd %s && git pull --ff-only -q 2>&1 && echo PULL_OK"):format(net.quote(script_dir())), 120) or ""
   if out:find("PULL_OK", 1, true) then
-    SPL.state, SPL.msg = "updated", "Updated. Reloading..."
-    dirty = true
-    clock.sleep(1)
-    if norns and norns.script and norns.script.load and norns.state and norns.state.script then
-      norns.script.load(norns.state.script)
-    else
-      SPL.msg = "Updated: restart mdusr"
-    end
+    -- new code only takes effect after a norns restart: ask for one
+    SPL.state, SPL.msg, SPL.sel = "updated", "Updated! Restart needed.", 1
   else
     SPL.state, SPL.msg = "failed", "Update failed (local edits?)"
     print("mdusr update: " .. out)
@@ -591,6 +588,13 @@ local function splash_key(n)
     local it = splash_items()[SPL.sel]
     if not it then return end
     if it.id == "update" then clock.run(do_update)
+    elseif it.id == "restart" then
+      SPL.msg = "restarting norns..."
+      dirty = true
+      redraw()
+      -- same as SYSTEM > RESET; falls back to restarting the norns services
+      if norns and norns.reset then norns.reset()
+      else os.execute("(sleep 1; sudo systemctl restart norns-sclang.service norns-crone.service norns-matron.service) &") end
     elseif it.id == "refresh" then SPL.active = false; refresh(source_list())
     else SPL.active = false end
   end
