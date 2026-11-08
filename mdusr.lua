@@ -4,6 +4,9 @@
 --
 -- E1 page   E2 scroll   E3 option
 -- K2 back   K3 select / send
+-- machine list: E3 right/left
+-- adds/removes it from the
+-- collection (send all at once)
 --
 -- page 1 LOAD: browse machines
 -- from the listed sites, send
@@ -144,85 +147,185 @@ local function wire_sleep(nbytes)
   clock.sleep(nbytes / rate)
 end
 
--- send a list of messages, paced. Runs inside a clock coroutine.
-local function send_msgs(msgs, label)
+-- send one or more files, paced. jobs = { {label=, msgs=, bytes=}, ... }
+-- Runs inside a clock coroutine.
+local function send_jobs(jobs)
   if not md then say("no MIDI device"); return false end
   local total = 0
-  for _, m in ipairs(msgs) do total = total + #m end
-  send.active, send.abort, send.done, send.total = true, false, 0, total
-  send.msg, send.msgs, send.label, send.result = 0, #msgs, label, nil
+  for _, j in ipairs(jobs) do total = total + j.bytes end
+  send.active, send.abort, send.done, send.total, send.result = true, false, 0, total, nil
+  send.file, send.files, send.wait_next = 0, #jobs, false
   dirty = true
   local chunk = params:get("chunk")
   local gap = params:get("gap") / 1000
-  for i, m in ipairs(msgs) do
-    send.msg = i
-    for a = 1, #m, chunk do
-      if send.abort then break end
-      local b = math.min(a + chunk - 1, #m)
-      local part = { table.unpack(m, a, b) }
-      md:send(part)
-      send.done = send.done + #part
-      dirty = true
-      wire_sleep(#part)
+  for fi, j in ipairs(jobs) do
+    send.file, send.label, send.msg, send.msgs = fi, j.label, 0, #j.msgs
+    if fi > 1 then
+      if params:get("between") == 2 then
+        -- wait for K3 so a new MACHINE MGR slot can be armed
+        send.wait_next = true
+        dirty = true
+        while send.wait_next and not send.abort do clock.sleep(0.05) end
+      else
+        clock.sleep(params:get("file_gap") / 1000)
+      end
     end
-    if send.abort then
-      -- never leave the MD inside an open SysEx: close it
-      if send.done < total then md:send({ 0xF7 }) end
-      break
+    if send.abort then break end
+    local file_done = 0
+    for i, m in ipairs(j.msgs) do
+      send.msg = i
+      for a = 1, #m, chunk do
+        if send.abort then break end
+        local b = math.min(a + chunk - 1, #m)
+        local part = { table.unpack(m, a, b) }
+        md:send(part)
+        send.done = send.done + #part
+        file_done = file_done + #part
+        dirty = true
+        wire_sleep(#part)
+      end
+      if send.abort then
+        -- never leave the MD inside an open SysEx: close it
+        if file_done < j.bytes then md:send({ 0xF7 }) end
+        break
+      end
+      if i < #j.msgs and gap > 0 then clock.sleep(gap) end
     end
-    if i < #msgs and gap > 0 then clock.sleep(gap) end
+    if send.abort then break end
   end
   send.result = send.abort and "aborted" or "done"
-  send.active = false
+  send.sent_files = send.abort and (send.file - 1) or send.files
+  send.active, send.wait_next = false, false
   dirty = true
   return not send.abort
 end
 
--- read + validate a .syx file into a pending send
-local function prepare_path(path, label, back)
+-- read + validate a .syx file -> job or nil, err
+local function load_job(path, label)
   local data, e = sysex.read_file(path)
-  if not data then say("read failed: " .. tostring(e)); return end
+  if not data then return nil, "read failed: " .. tostring(e) end
   local r = sysex.split(data)
-  if #r.msgs == 0 then say("no SysEx in file"); return end
-  pending = { msgs = r.msgs, bytes = r.bytes, label = label, back = back, errors = r.errors,
-    junk = r.junk, elektron = sysex.is_elektron(r.msgs[1]) }
+  if #r.msgs == 0 then return nil, "no SysEx in " .. label end
+  return { msgs = r.msgs, bytes = r.bytes, label = label, errors = r.errors,
+    elektron = sysex.is_elektron(r.msgs[1]) }
+end
+
+local function set_pending(jobs, back)
+  local p = { jobs = jobs, back = back, bytes = 0, nmsgs = 0, errors = 0, elektron = true }
+  for _, j in ipairs(jobs) do
+    p.bytes = p.bytes + j.bytes
+    p.nmsgs = p.nmsgs + #j.msgs
+    p.errors = p.errors + #j.errors
+    p.elektron = p.elektron and j.elektron
+  end
+  p.label = #jobs == 1 and jobs[1].label or (#jobs .. " files")
+  pending = p
   dirty = true
 end
 
--- make sure a machine file is on disk, then prepare it
+local function prepare_path(path, label, back)
+  local j, e = load_job(path, label)
+  if not j then return say(e) end
+  set_pending({ j }, back)
+end
+
+-- make sure a machine file is on disk (download/extract). In a coroutine.
+local function ensure_local(sid, f)
+  if f.path then return f.path end
+  local dir = CACHE .. sid .. "/"
+  util.make_dir(dir)
+  local path = dir .. text.safe(f.filename or text.basename(f.url or f.zip_member or "x.syx"))
+  if exists(path) then return path end
+  busy = "downloading " .. (f.filename or "")
+  dirty = true
+  local ok, e
+  if f.zip_member then
+    if not exists(f.zip) then busy = nil; return nil, "zip missing: refresh source" end
+    ok, e = net.unzip_extract(f.zip, f.zip_member, path)
+  else
+    ok, e = net.get_file(f.url, path)
+  end
+  busy = nil
+  dirty = true
+  if not ok then return nil, "offline? " .. tostring(e) end
+  return path
+end
+
 local function prepare_file(sid, f, back)
   if busy then return say("busy: " .. busy) end
   clock.run(function()
-    local path = f.path
-    if not path then
-      local dir = CACHE .. sid .. "/"
-      util.make_dir(dir)
-      path = dir .. text.safe(f.filename or text.basename(f.url or f.zip_member or "x.syx"))
-      if not exists(path) then
-        busy = "downloading " .. (f.filename or "")
-        dirty = true
-        local ok, e
-        if f.zip_member then
-          if not exists(f.zip) then
-            busy = nil; dirty = true
-            return say("zip missing: refresh source")
-          end
-          ok, e = net.unzip_extract(f.zip, f.zip_member, path)
-        else
-          ok, e = net.get_file(f.url, path)
-        end
-        busy = nil
-        dirty = true
-        if not ok then return say("offline? " .. tostring(e), 3) end
-      end
-    end
+    local path, e = ensure_local(sid, f)
+    if not path then return say(e, 3) end
     prepare_path(path, f.filename or text.basename(path), back)
   end)
 end
 
 local function est_seconds(p)
   local gap = params:get("gap") / 1000
-  return p.bytes / params:get("rate") + gap * math.max(0, #p.msgs - 1)
+  local s = p.bytes / params:get("rate") + gap * math.max(0, p.nmsgs - #p.jobs)
+  if params:get("between") == 1 then s = s + params:get("file_gap") / 1000 * (#p.jobs - 1) end
+  return s
+end
+
+-- ---------------------------------------------------------------- collection
+local C = { items = {}, sel = 1 }
+local COLL_FILE = DATA .. "collection.json"
+
+local function coll_key(sid, f) return sid .. ":" .. (f.filename or f.url or "?") end
+
+local function coll_find(key)
+  for i, it in ipairs(C.items) do if it.key == key then return i end end
+end
+
+local function coll_save() write_text(COLL_FILE, json.encode(C.items)) end
+
+local function coll_load()
+  local t = json.decode(read_text(COLL_FILE) or "")
+  C.items = type(t) == "table" and t or {}
+end
+
+-- file currently chosen for a machine (variant picked in its detail view)
+local function chosen_file(m) return m.files[m._file or 1] end
+
+local function coll_set(sid, m, on)
+  local f = chosen_file(m)
+  if not f then return say("no .syx for " .. m.name) end
+  local key = coll_key(sid, f)
+  local i = coll_find(key)
+  if on and not i then
+    C.items[#C.items + 1] = { key = key, sid = sid, name = m.name, file = f }
+    say("+ " .. (f.filename or m.name) .. " (" .. #C.items .. ")", 1.5)
+  elseif not on and i then
+    table.remove(C.items, i)
+    say("- " .. (f.filename or m.name) .. " (" .. #C.items .. ")", 1.5)
+  end
+  coll_save()
+end
+
+local function machine_collected(sid, m)
+  for _, f in ipairs(m.files or {}) do
+    if coll_find(coll_key(sid, f)) then return true end
+  end
+  return false
+end
+
+local function prepare_collection()
+  if #C.items == 0 then return say("collection is empty") end
+  if busy then return say("busy: " .. busy) end
+  clock.run(function()
+    local jobs = {}
+    for i, it in ipairs(C.items) do
+      busy = ("preparing %d/%d"):format(i, #C.items)
+      dirty = true
+      local path, e = ensure_local(it.sid, it.file)
+      if not path then busy = nil; return say(it.name .. ": " .. tostring(e), 3) end
+      local j, je = load_job(path, it.file.filename or it.name)
+      if not j then busy = nil; return say(je, 3) end
+      jobs[#jobs + 1] = j
+    end
+    busy = nil
+    set_pending(jobs, "collection")
+  end)
 end
 
 -- ---------------------------------------------------------------- backup
@@ -342,7 +445,7 @@ end
 local function load_items()
   local list = source_list()
   if L.level == "sources" then
-    local items = {}
+    local items = { { id = "_coll", name = "Collection" } }
     for _, s in ipairs(list) do items[#items + 1] = s end
     items[#items + 1] = { id = "_refresh", name = "Refresh all" }
     return items
@@ -352,6 +455,10 @@ local function load_items()
     return items
   elseif L.level == "machines" then
     return machines_in(L.sid, L.cat)
+  elseif L.level == "collection" then
+    local items = { "_send", "_clear" }
+    for _, it in ipairs(C.items) do items[#items + 1] = it end
+    return items
   end
   return {}
 end
@@ -375,7 +482,9 @@ function key(n, z)
   if z == 0 then return end
   -- global: sending / confirm screens capture keys
   if send.active then
-    if n == 2 then send.abort = true; say("aborting...") end
+    if n == 2 then send.abort = true; say("aborting...")
+    elseif n == 3 and send.wait_next then send.wait_next = false end
+    dirty = true
     return
   end
   if send.result then send.result = nil; dirty = true; return end
@@ -387,7 +496,7 @@ function key(n, z)
     if n == 3 then
       local p = pending
       pending = nil
-      clock.run(function() send_msgs(p.msgs, p.label) end)
+      clock.run(function() send_jobs(p.jobs) end)
     elseif n == 2 then
       pending = nil
     end
@@ -401,6 +510,7 @@ function key(n, z)
       if L.level == "sources" then
         local it = items[L.sel.sources]
         if it.id == "_refresh" then refresh(source_list())
+        elseif it.id == "_coll" then L.level = "collection"; L.sel.collection = 1
         else enter_source(it) end
       elseif L.level == "cats" then
         if L.sel.cats == 1 then
@@ -412,13 +522,26 @@ function key(n, z)
         end
       elseif L.level == "machines" then
         local m = items[L.sel.machines]
-        if m then L.machine = m; L.level = "detail"; L.scroll = 0; L.file = 1 end
+        if m then L.machine = m; L.level = "detail"; L.scroll = 0; L.file = m._file or 1 end
       elseif L.level == "detail" then
         local f = L.machine.files[L.file]
         if f then prepare_file(L.sid, f, "detail") else say("no .syx for this machine") end
+      elseif L.level == "collection" then
+        local it = items[L.sel.collection]
+        if it == "_send" then prepare_collection()
+        elseif it == "_clear" then
+          if L.confirm_clear then C.items = {}; coll_save(); L.confirm_clear = false; say("collection cleared")
+          else L.confirm_clear = true; say("K3 again to clear all") end
+        elseif it then
+          table.remove(C.items, L.sel.collection - 2)
+          coll_save()
+          say("removed " .. (it.file.filename or it.name))
+          L.sel.collection = util.clamp(L.sel.collection, 1, #C.items + 2)
+        end
       end
     elseif n == 2 then
       if L.level == "detail" then L.level = "machines"
+      elseif L.level == "collection" then L.level = "sources"
       elseif L.level == "machines" then L.level = L.skipped_cats and "sources" or "cats"
       elseif L.level == "cats" then L.level = "sources" end
     end
@@ -436,6 +559,7 @@ function key(n, z)
 end
 
 function enc(n, d)
+  L.confirm_clear = false
   if n == 1 then
     if not send.active and not pending and not B.full then page = util.clamp(page + d, 1, 2) end
     dirty = true
@@ -445,7 +569,23 @@ function enc(n, d)
   if page == 1 then
     if L.level == "detail" then
       if n == 2 then L.scroll = math.max(0, L.scroll + d)
-      elseif n == 3 then L.file = util.clamp(L.file + d, 1, math.max(1, #L.machine.files)) end
+      elseif n == 3 then
+        L.file = util.clamp(L.file + d, 1, math.max(1, #L.machine.files))
+        L.machine._file = L.file
+      end
+    elseif n == 3 and L.level == "machines" then
+      -- E3 right = add to collection, left = remove
+      local m = load_items()[L.sel.machines]
+      if m then coll_set(L.sid, m, d > 0) end
+    elseif n == 3 and L.level == "collection" then
+      -- E3 moves the selected file up/down in the send order
+      local i = L.sel.collection - 2
+      local j = i + (d > 0 and 1 or -1)
+      if i >= 1 and j >= 1 and j <= #C.items then
+        C.items[i], C.items[j] = C.items[j], C.items[i]
+        L.sel.collection = j + 2
+        coll_save()
+      end
     elseif n == 2 then
       local items = load_items()
       local k = L.level
@@ -520,23 +660,38 @@ local function progress(y, frac, label)
 end
 
 local function draw_send()
-  header("SENDING " .. send.label)
+  local frac = send.total > 0 and send.done / send.total or 0
+  if send.wait_next then
+    header(("NEXT %d/%d"):format(send.file, send.files))
+    screen.level(15); screen.move(0, 20); screen.text(fit(send.label, 128))
+    screen.level(10)
+    screen.move(0, 30); screen.text("MACHINE MGR: pick the")
+    screen.move(0, 39); screen.text("next slot, arm RECV.")
+    progress(43, frac)
+    screen.level(4); screen.move(0, 62); screen.text("K2 stop")
+    screen.level(15); screen.move(W, 62); screen.text_right("K3 SEND")
+    return
+  end
+  header(send.files > 1 and ("SENDING %d/%d"):format(send.file, send.files) or "SENDING")
+  screen.level(15); screen.move(0, 20); screen.text(fit(send.label, 128))
   screen.level(10)
-  screen.move(0, 22)
+  screen.move(0, 30)
   screen.text(("msg %d/%d  %d/%d B"):format(send.msg, send.msgs, send.done, send.total))
-  progress(30, send.total > 0 and send.done / send.total or 0)
+  progress(36, frac)
   screen.level(4); screen.move(0, 62); screen.text("K2 abort")
 end
 
 local function draw_result()
   header(send.result == "done" and "SENT" or "ABORTED")
   screen.level(10)
+  local what = send.files > 1 and (send.files .. " files") or send.label
   local lines = send.result == "done" and {
-    send.label .. " sent.",
+    what .. " sent.",
     "Check the MD screen for",
     "DSP FULL / MEM FULL /",
     "BUFFER FULL (try slower).",
-  } or { "Transfer stopped.", "The MD slot may hold a", "partial machine: resend." }
+  } or { "Transfer stopped.", ("%d of %d files complete."):format(send.sent_files or 0, send.files),
+    "The current MD slot may", "hold a partial machine." }
   for i, l in ipairs(lines) do screen.move(0, 10 + i * 9); screen.text(fit(l, 128)) end
   screen.level(4); screen.move(0, 62); screen.text("any key")
 end
@@ -548,12 +703,16 @@ local function draw_confirm()
   local lines = {}
   if p.back == "files" then
     lines = { "Restore overwrites the", "slots stored in the dump." }
+  elseif #p.jobs > 1 then
+    lines = { "MACHINE MGR: pick a slot,", "arm RECV. Then K3.",
+      params:get("between") == 2 and "K3 again before each file" or
+        ("auto, %.1fs between files"):format(params:get("file_gap") / 1000) }
   else
     lines = { "On the MD: GLOBAL > FILE >", "MACHINE MGR, pick a slot,", "arm RECV. Then K3." }
   end
-  lines[#lines + 1] = ("%d msg, %d B, ~%ds"):format(#p.msgs, p.bytes, math.ceil(est_seconds(p)))
+  lines[#lines + 1] = ("%d msg, %d B, ~%ds"):format(p.nmsgs, p.bytes, math.ceil(est_seconds(p)))
   local warn = {}
-  if #p.errors > 0 then warn[#warn + 1] = #p.errors .. " broken msg skipped" end
+  if p.errors > 0 then warn[#warn + 1] = p.errors .. " broken msg skipped" end
   if not p.elektron then warn[#warn + 1] = "not Elektron SysEx" end
   if #warn > 0 then lines[#lines + 1] = "! " .. table.concat(warn, ", ") end
   for i, l in ipairs(lines) do screen.move(0, 10 + i * 9); screen.text(fit(l, 128)) end
@@ -574,6 +733,7 @@ local function draw_load()
     header("LOAD", "1/2")
     draw_list(load_items(), L.sel.sources, function(s)
       if s.id == "_refresh" then return "> Refresh all" end
+      if s.id == "_coll" then return "> Collection", tostring(#C.items) end
       local x = idx[s.id]
       local n = x and #(x.machines or {}) or 0
       local tag = x and x.error and "!" or ""
@@ -595,9 +755,17 @@ local function draw_load()
       if x and x.error then screen.move(0, 44); screen.text(fit(x.error, 128)) end
     else
       draw_list(items, L.sel.machines, function(m)
-        return m.name, m.version and tostring(m.version):sub(1, 6) or nil
+        local mark = machine_collected(L.sid, m) and "* " or "  "
+        return mark .. m.name, m.version and tostring(m.version):sub(1, 6) or nil
       end)
     end
+  elseif L.level == "collection" then
+    header("COLLECTION", #C.items .. " files")
+    draw_list(load_items(), L.sel.collection, function(it, i)
+      if it == "_send" then return "> Send all", #C.items > 0 and "K3" or nil end
+      if it == "_clear" then return "> Clear all" end
+      return (i - 2) .. " " .. (it.file.filename or it.name), it.sid:sub(1, 5)
+    end)
   elseif L.level == "detail" then
     local m = L.machine
     header(m.name, m.version and tostring(m.version) or nil)
@@ -619,7 +787,8 @@ local function draw_load()
     screen.level(15)
     screen.move(0, 63)
     if f then
-      local lab = (#m.files > 1 and (L.file .. "/" .. #m.files .. " ") or "") .. f.label
+      local mark = coll_find(coll_key(L.sid, f)) and "* " or ""
+      local lab = mark .. (#m.files > 1 and (L.file .. "/" .. #m.files .. " ") or "") .. f.label
       screen.text(fit(lab, 104))
       screen.move(W, 63); screen.text_right("K3")
     else
@@ -692,11 +861,14 @@ function init()
   params:add_number("rate", "max bytes/sec", 200, 3125, 2500)
   params:add_number("gap", "gap between msgs ms", 0, 2000, 150)
   params:add_number("req_timeout", "request timeout s", 1, 10, 2)
+  params:add_option("between", "between files", { "auto gap", "wait for K3" }, 1)
+  params:add_number("file_gap", "gap between files ms", 0, 10000, 1500)
   params:add_option("autorefresh", "refresh on start", { "if empty", "always", "never" }, 1)
   params:read()
   params:bang()
 
   load_cache()
+  coll_load()
   local mode = params:get("autorefresh")
   local empty = true
   for _, s in ipairs(sources) do if idx[s.id] and #(idx[s.id].machines or {}) > 0 then empty = false end end

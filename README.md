@@ -17,11 +17,22 @@ PARAMETERS > EDIT: pick the MIDI device the MD is connected to (in and out).
 |---|---|---|
 | E1 | page | page |
 | E2 | scroll list / description | scroll menu |
-| E3 | choose file variant (detail view) | change kit / pattern / song / global number |
+| E3 | machine list: right = add to collection, left = remove; detail: choose file variant; collection: move file up/down | change kit / pattern / song / global number |
 | K2 | back, cancel, abort send | back, abort |
 | K3 | open, prepare, confirm send | run selected item |
 
 LOAD flow: source → category (skipped when a source has only one) → machine → detail (description, version, track/RAM notes, file variants) → K3 downloads the .syx if not cached and shows a confirm screen with message count, size and estimated time → K3 sends.
+
+## Collection (batch send)
+
+In any machine list, turn E3 right to check a machine off (marked `*`), left to uncheck. The file added is the variant last chosen with E3 in that machine's detail view (default: the first). Machines from different sources can be mixed. The collection is saved between sessions.
+
+**> Collection** (top of the source list) shows the files in send order:
+- **> Send all**: downloads anything not cached, validates every file, shows one confirm screen (files, messages, bytes, estimated time), then sends them in order with one progress bar.
+- **> Clear all**: press K3 twice.
+- On a file: E3 moves it up/down, K3 removes it.
+
+Between files, `between files` decides what happens: `auto gap` waits `gap between files ms` (default 1500) and carries on; `wait for K3` stops before each file so the next MACHINE MGR slot can be armed. K2 stops a batch; the result screen says how many files completed.
 
 Before confirming, set the MD to receive: **GLOBAL > FILE > MACHINE MGR, pick a slot, arm RECV** (per the MDX X.20 readme). If the MD shows BUFFER FULL, lower `max bytes/sec` or raise `gap between msgs`.
 
@@ -44,6 +55,7 @@ Add more sites in `lib/sources.lua`. GitHub's unauthenticated API allows 60 requ
 - `max bytes/sec` (2500): pacing; DIN MIDI tops out at 3125.
 - `gap between msgs ms` (150): pause between SysEx messages.
 - `request timeout s` (2): backup page wait per request.
+- `between files` (auto gap / wait for K3) and `gap between files ms` (1500): batch sends.
 - `refresh on start`: if empty / always / never.
 
 ## BACKUP page
@@ -61,6 +73,7 @@ Incoming SysEx is reassembled across MIDI callbacks; realtime bytes (clock) insi
 - `dust/data/mdusr/cache/`: index per source (JSON) and downloaded .syx/zip.
 - `dust/data/mdusr/backups/`: saved dumps.
 - `dust/data/mdusr/local/`: your own .syx files.
+- `dust/data/mdusr/collection.json`: the collection.
 
 ## Tests
 

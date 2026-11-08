@@ -110,6 +110,7 @@ local function bytes_str(msgs)
   return table.concat(s)
 end
 
+local BD_SYX = bytes_str({ syx_msg(0x5E, 400, 9), syx_msg(0x5E, 90, 10) })
 local USR_SYX = bytes_str({ syx_msg(0x5E, 300, 1), syx_msg(0x5E, 700, 2), syx_msg(0x5E, 50, 3) })
 
 local MANIFEST = [[{"date":"2026-11-06","hardwareQualified":false,"target":"MDX with USR support",
@@ -172,6 +173,7 @@ local MDX_TREE = [[{"tree":[{"path":"firmware/mdx/X.20/Machinedrum_SPS1-UW_OS_X.
 local WEB = {
   ["https://wftlrd.uk/machinedrum-usr/manifest.json"] = MANIFEST,
   ["https://wftlrd.uk/machinedrum-usr/downloads/D11-CP-v1.0.syx"] = USR_SYX,
+  ["https://wftlrd.uk/machinedrum-usr/downloads/D11-BD-v1.0.syx"] = BD_SYX,
   ["https://murdenihcam.github.io/murdenihcam-usr-machines/machines.js"] = MACHINES_JS,
   ["https://murdenihcam.github.io/murdenihcam-usr-machines/downloads/SMP-SL/SMP-SN.syx"] = USR_SYX,
   ["https://moncalamari.github.io/dbx-usr-machines/"] = DBX_HTML,
@@ -281,7 +283,7 @@ check(mx and mx.machines[1].desc == "two-operator FM bass with feedback.", "mdx 
 check(mx and mx.machines[2].desc == "Karplus plucked string with damping control.", "mdx desc next line: " .. tostring(mx and mx.machines[2].desc))
 
 -- browse wftlrd -> DR-110 -> D11-CP -> send
-key(3, 1); redraw()            -- enter wftlrd (sources sel 1)
+enc(2, 1); key(3, 1); redraw() -- enter wftlrd (sources item 2, after Collection)
 enc(2, 1); key(3, 1); redraw() -- cats: item 2 = DR-110
 key(3, 1); redraw()            -- D11-CP detail
 local seen = table.concat(drawn, "|")
@@ -320,7 +322,7 @@ key(2, 1)
 -- zip machine (MDX) send
 for _ = 1, 4 do key(2, 1) end   -- back to sources
 for _ = 1, 20 do enc(2, -1) end
-for i, src in ipairs(sources) do if src.id == "mdx" then for _ = 1, i - 1 do enc(2, 1) end end end
+for i, src in ipairs(sources) do if src.id == "mdx" then for _ = 1, i do enc(2, 1) end end end
 key(3, 1); redraw()            -- mdx has 1 category -> machines directly? (USR folder)
 local s1 = table.concat(drawn, "|")
 check(s1:find("FMX%-B1"), "mdx source opens machine list")
@@ -390,6 +392,82 @@ sent = {}
 key(3, 1)
 run_until(function() return #tasks <= 1 end, 3000)
 check(bytes_str({ sent }) == data, "restore sends file bytes exactly")
+
+-------------------------------------------------------------------- collection
+enc(1, -1) -- back to LOAD
+local function to_sources() for _ = 1, 5 do key(2, 1) end; for _ = 1, 20 do enc(2, -1) end end
+local function open_source(id)
+  to_sources()
+  for i, src in ipairs(sources) do if src.id == id then for _ = 1, i do enc(2, 1) end end end
+  key(3, 1)
+end
+-- wftlrd -> DR-110 -> add D11-CP and D11-BD with E3
+open_source("wftlrd")
+enc(2, 1); key(3, 1)       -- DR-110
+for _ = 1, 5 do enc(2, -1) end
+enc(3, 1)                  -- add D11-CP
+enc(2, 1); enc(3, 1)       -- add D11-BD
+enc(3, 1)                  -- adding twice is a no-op
+redraw()
+check(table.concat(drawn, "|"):find("%* D11%-CP") and table.concat(drawn, "|"):find("%* D11%-BD"), "collected machines marked")
+-- mdx: add the second machine
+open_source("mdx")
+enc(2, 1); enc(3, 1)       -- PLK-01
+-- remove + re-add D11-BD to check E3 left
+open_source("wftlrd"); enc(2, 1); key(3, 1); for _ = 1, 5 do enc(2, -1) end; enc(2, 1)
+enc(3, -1); enc(3, 1)
+local cj = json.decode(read_file and "" or (io.open(_path.data .. "mdusr/collection.json"):read("a")))
+check(cj and #cj == 3 and cj[1].file.filename == "D11-CP-v1.0.syx" and cj[3].file.filename == "D11-BD-v1.0.syx", "collection saved in order (" .. tostring(cj and #cj) .. ")")
+-- open collection, move D11-BD (item 3) up to position 2
+to_sources(); key(3, 1)    -- Collection is first item
+redraw()
+check(table.concat(drawn, "|"):find("COLLECTION"), "collection screen")
+for _ = 1, 4 do enc(2, 1) end -- rows: send, clear, 1, 2, 3 -> sel 5 (item 3)
+enc(3, -1)                 -- move up
+redraw()
+check(table.concat(drawn, "|"):find("2 D11%-BD"), "reorder moves item up")
+-- send all, auto gap
+for _ = 1, 10 do enc(2, -1) end
+key(3, 1)                  -- Send all -> prepare (downloads D11-BD)
+run_until(function() return #tasks <= 1 end, 60)
+redraw()
+check(table.concat(drawn, "|"):find("3 files"), "batch confirm shows 3 files")
+sent = {}
+local t1 = now
+key(3, 1)
+run_until(function() return #tasks <= 1 end, 120)
+check(bytes_str({ sent }) == USR_SYX .. BD_SYX .. USR_SYX, "batch sends files in collection order")
+check(now - t1 >= 3.0, "auto gap between files (" .. string.format("%.2f", now - t1) .. "s)")
+redraw()
+check(table.concat(drawn, "|"):find("3 files sent"), "batch result screen")
+key(2, 1)
+-- wait-for-K3 mode
+params:set("between", 2)
+key(3, 1); run_until(function() return #tasks <= 1 end, 60)
+sent = {}
+key(3, 1)
+run_until(function() return #sent >= #USR_SYX end, 60)
+run_until(function() return false end, 5) -- give it time; it must hold at file 2
+redraw()
+check(#sent == #USR_SYX and table.concat(drawn, "|"):find("NEXT 2/3"), "waits for K3 before file 2")
+key(3, 1); run_until(function() return #sent >= #USR_SYX + #BD_SYX end, 60)
+run_until(function() return false end, 3)
+check(#sent == #USR_SYX + #BD_SYX, "waits again before file 3")
+key(2, 1)                  -- stop instead
+run_until(function() return #tasks <= 1 end, 10)
+redraw()
+check(table.concat(drawn, "|"):find("2 of 3 files"), "stopped batch reports progress")
+key(2, 1)
+-- remove item with K3, clear needs two presses
+for _ = 1, 2 do enc(2, 1) end
+key(3, 1)
+local cj2 = json.decode(io.open(_path.data .. "mdusr/collection.json"):read("a"))
+check(#cj2 == 2, "K3 on item removes it")
+for _ = 1, 10 do enc(2, -1) end; enc(2, 1)
+key(3, 1)
+check(#json.decode(io.open(_path.data .. "mdusr/collection.json"):read("a")) == 2, "first clear press only asks")
+key(3, 1)
+check(#json.decode(io.open(_path.data .. "mdusr/collection.json"):read("a")) == 0, "second press clears")
 
 print(("%d passed, %d failed"):format(passes, fails))
 os.exit(fails == 0 and 0 or 1)
