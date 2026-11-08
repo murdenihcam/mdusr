@@ -91,36 +91,70 @@ local function make_env(s)
   }
 end
 
+-- refresh status per source while a refresh runs: "wait" | "get" | "ok" | "fail"
+local R = { active = false, state = {}, t0 = 0 }
+
+local function log(line)
+  local f = io.open(DATA .. "refresh.log", "a")
+  if f then f:write(os.date("%Y-%m-%d %H:%M:%S ") .. line .. "\n"); f:close() end
+  print("mdusr: " .. line)
+end
+
+local function refresh_one(s)
+  if s.id == "local" then load_local_index(); R.state[s.id] = "ok"; return true end
+  R.state[s.id] = "get"
+  dirty = true
+  local t0 = util.time()
+  local ok, res, err = pcall(s.load, make_env(s))
+  if ok and res then
+    res.updated = os.time()
+    table.sort(res.machines, function(a, b) return (a.sort or 0) < (b.sort or 0) end)
+    idx[s.id] = res
+    write_text(CACHE .. "index_" .. s.id .. ".json", json.encode(res))
+    R.state[s.id] = "ok"
+    local nf = 0
+    for _, m in ipairs(res.machines) do nf = nf + #m.files end
+    log(("%s: ok, %d machines, %d files, %.1fs"):format(s.name, #res.machines, nf, util.time() - t0))
+    for _, n in ipairs(res.notes or {}) do if n:find("failed") then log("  " .. n) end end
+  else
+    local msg = tostring(ok and err or res)
+    local old = idx[s.id] or { machines = {}, notes = {} }
+    old.error = msg
+    idx[s.id] = old
+    R.state[s.id] = "fail"
+    log(("%s: FAILED (%s), cached list kept"):format(s.name, msg))
+  end
+  dirty = true
+  return R.state[s.id] == "ok"
+end
+
 local function refresh(list)
   if busy then return say("busy: " .. busy) end
+  R.active, R.state, R.t0 = true, {}, util.time()
+  busy = "refreshing"
+  for _, s in ipairs(list) do R.state[s.id] = "wait" end
+  log("refresh started (" .. #list .. " sources)")
+  local left = #list
+  local okn, failn = 0, 0
+  -- every source fetches in parallel; the slowest decides the total time
+  for _, s in ipairs(list) do
+    clock.run(function()
+      if refresh_one(s) then okn = okn + 1 else failn = failn + 1 end
+      left = left - 1
+    end)
+  end
   clock.run(function()
-    for i, s in ipairs(list) do
-      if s.id == "local" then
-        load_local_index()
-      else
-        busy = ("refresh %s (%d/%d)"):format(s.name, i, #list)
-        dirty = true
-        local ok, res, err = pcall(s.load, make_env(s))
-        if ok and res then
-          res.updated = os.time()
-          table.sort(res.machines, function(a, b)
-            if a.category ~= b.category then return (a.sort or 0) < (b.sort or 0) end
-            return (a.sort or 0) < (b.sort or 0)
-          end)
-          idx[s.id] = res
-          write_text(CACHE .. "index_" .. s.id .. ".json", json.encode(res))
-        else
-          local msg = ok and err or res
-          print("mdusr: " .. s.name .. ": " .. tostring(msg))
-          local old = idx[s.id] or { machines = {}, notes = {} }
-          old.error = tostring(msg)
-          idx[s.id] = old
-          say(s.name .. ": failed, cache kept", 3)
-        end
-      end
+    while left > 0 do
+      busy = ("refreshing %d/%d  %ds"):format(#list - left, #list, math.floor(util.time() - R.t0))
+      dirty = true
+      clock.sleep(0.25)
     end
     busy = nil
-    dirty = true
+    R.active = false
+    local summary = failn == 0 and ("refresh ok: %d sources"):format(okn)
+      or ("%d ok, %d FAILED (data/mdusr/refresh.log)"):format(okn, failn)
+    log(summary .. (" in %.1fs"):format(util.time() - R.t0))
+    say(summary, 5)
   end)
 end
 
@@ -736,6 +770,10 @@ local function draw_load()
       if s.id == "_coll" then return "> Collection", tostring(#C.items) end
       local x = idx[s.id]
       local n = x and #(x.machines or {}) or 0
+      local st = R.active and R.state[s.id]
+      if st == "wait" then return s.name, "queued" end
+      if st == "get" then return s.name, ("..."):sub(1, 1 + math.floor(util.time() * 3) % 3) end
+      if st == "fail" then return s.name, "FAIL " .. n end
       local tag = x and x.error and "!" or ""
       return s.name, tag .. n .. " " .. age(x and x.updated)
     end)
@@ -867,6 +905,7 @@ function init()
   params:read()
   params:bang()
 
+  net.tmpdir = CACHE
   load_cache()
   coll_load()
   local mode = params:get("autorefresh")

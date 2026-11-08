@@ -241,6 +241,61 @@ S[#S + 1] = github_tree_source {
 }
 
 ---------------------------------------------------------------------------
+-- Kitbasher (kitbasher.xyz/mds): mds/catalog.json in etcetc000/kitbasher.
+-- Lists mds/tx6 and mds/community/*, except community/murdenihcam (already
+-- its own source). mds/core is skipped: those are the MDX built-ins.
+---------------------------------------------------------------------------
+local KB_RAW = "https://raw.githubusercontent.com/etcetc000/kitbasher/main/"
+local function kitbasher_include(file)
+  if file:match("^mds/tx6/") then return true end
+  if file:match("^mds/community/") and not file:lower():match("^mds/community/murdenihcam/") then
+    return true
+  end
+  return false
+end
+S[#S + 1] = {
+  id = "kitbasher",
+  name = "Kitbasher",
+  home = "https://kitbasher.xyz/mds",
+  include = kitbasher_include,
+  load = function(env)
+    local c, e = decode_or_fail(env.get(KB_RAW .. "mds/catalog.json"), "catalog.json")
+    if not c then return nil, e end
+    local out = {}
+    for i, x in ipairs(c.machines or {}) do
+      local file = x.file or ""
+      if kitbasher_include(file) and file:lower():match("%.syx$") then
+        local fname = text.basename(file)
+        local stem = fname:gsub("%.[Ss][Yy][Xx]$", "")
+        local cat, name
+        local tx6 = file:match("^mds/tx6/([^/]+)/")
+        if tx6 then
+          cat, name = "TX6 (Simple606)", "TX6-" .. tx6:upper()
+        else
+          local author = file:match("^mds/community/([^/]+)/") or "community"
+          cat, name = "Community: " .. (x.author or author), stem:upper()
+        end
+        local extra = {}
+        if x.author then extra[#extra + 1] = "By " .. text.ascii(x.author) end
+        if x.hardware == "uw" then extra[#extra + 1] = "UW only"
+        elseif x.hardware == "all" then extra[#extra + 1] = "All models" end
+        if x.license then extra[#extra + 1] = "Licence: " .. text.ascii(x.license) end
+        if x.notes and x.notes ~= "" then extra[#extra + 1] = text.clean(x.notes) end
+        out[#out + 1] = {
+          name = name, title = "", category = cat,
+          desc = text.clean(x.summary or ""), sort = (tx6 and 0 or 1000) + i,
+          extra = extra,
+          files = { { label = fname, url = KB_RAW .. text.urlpath(file), filename = text.safe(
+            (file:gsub("^mds/", ""):gsub("/", "_"))), size = x.size, sha256 = x.sha256 } },
+        }
+      end
+    end
+    if #out == 0 then return nil, "catalog has no tx6/community machines" end
+    return { machines = out, notes = { "core/ (MDX built-ins) and community/murdenihcam are skipped." } }
+  end,
+}
+
+---------------------------------------------------------------------------
 -- 5. MDX X.20 bundled machines : .syx files inside the firmware zip
 ---------------------------------------------------------------------------
 local FIRMWARE_MIN = 100 * 1024 -- anything this big is the OS image, never offered
@@ -297,29 +352,39 @@ S[#S + 1] = {
     end
     local list, le = env.unzip_list(zip)
     if not list then return nil, "unzip failed: " .. tostring(le) end
-    local readme_txt = {}
-    local syx = {}
+    local syx, readmes = {}, {}
     for _, z in ipairs(list) do
       local low = z.name:lower()
       if low:match("%.syx$") and (z.size or 0) < FIRMWARE_MIN then
         syx[#syx + 1] = z
-      elseif low:match("readme") or low:match("%.txt$") or low:match("%.md$") then
-        readme_txt[#readme_txt + 1] = env.unzip_read(zip, z.name) or ""
+      elseif low:match("readme[^/]*%.txt$") then
+        readmes[#readmes + 1] = z
       end
     end
-    local readme = table.concat(readme_txt, "\n\n")
+    -- descriptions come only from the machines' own README (USR-Machines/
+    -- README.txt), never from the OS readme or changelog
+    local pick
+    for _, z in ipairs(readmes) do
+      if z.name:lower():match("usr[%-_ ]?machines/readme") then pick = z end
+    end
+    if not pick then
+      local dirs = {}
+      for _, z in ipairs(syx) do dirs[(z.name:match("^(.*)/") or "")] = true end
+      for _, z in ipairs(readmes) do
+        if dirs[(z.name:match("^(.*)/") or "")] and not z.name:lower():match("os") then pick = z end
+      end
+    end
+    local readme = pick and env.unzip_read(zip, pick.name) or nil
     table.sort(syx, function(a, b) return a.name < b.name end)
     local out = {}
     for i, z in ipairs(syx) do
       local fname = text.basename(z.name)
       local stem = fname:gsub("%.[Ss][Yy][Xx]$", "")
       local short = stem:match("^(%u+%-%w+)") or stem
-      local folder = z.name:match("([^/]+)/[^/]+$")
       local pre = short:match("^(%u+)%-")
       out[#out + 1] = {
         name = short, title = (stem ~= short) and stem or "",
-        category = (folder and folder ~= zipname:gsub("%.zip$", "") and folder)
-          or PREFIX_CAT[pre] or "Bundled",
+        category = PREFIX_CAT[pre] or "MDX bundle",
         desc = readme_entry(readme, stem) or readme_entry(readme, short)
           or ("Bundled with " .. zipname:gsub("%.zip$", "")),
         sort = i, extra = {},

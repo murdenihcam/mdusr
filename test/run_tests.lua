@@ -159,18 +159,28 @@ local BENTO_README = "# NFX-BO\n\n![badge](x.svg)\n\nA custom Machinedrum **User
 
 -- MDX zip with readme, two machines and a big firmware image
 local zipdir = TMP .. "zipsrc/"
-os.execute("mkdir -p " .. zipdir .. "USR")
+os.execute("mkdir -p " .. zipdir .. "USR-Machines")
 local function wr(p, s) local f = assert(io.open(p, "wb")); f:write(s); f:close() end
-wr(zipdir .. "USR/FMX-B1.syx", USR_SYX)
-wr(zipdir .. "USR/PLK-01.syx", USR_SYX)
+wr(zipdir .. "USR-Machines/FMX-B1.syx", USR_SYX)
+wr(zipdir .. "USR-Machines/PLK-01.syx", USR_SYX)
 wr(zipdir .. "Machinedrum_SPS1-UW_OS_X.20_C.syx", string.rep("\xF0\x01\xF7", 60000))
-wr(zipdir .. "README.txt", "Bundled user machines\n---------------------\n\n  FMX-B1.syx : two-operator FM bass with feedback.\n  PLK-01.syx\n      Karplus plucked string with damping control.\n")
+wr(zipdir .. "Machinedrum_SPS1-UW_OS-X.20_readme.txt", "OS notes\n\nFMX-B1 was renamed in this OS build, see the changelog for details.\n")
+wr(zipdir .. "USR-Machines/README.txt", "Bundled user machines\n---------------------\n\n  FMX-B1.syx : two-operator FM bass with feedback.\n  PLK-01.syx\n      Karplus plucked string with damping control.\n")
 local ZIP = TMP .. "fx/Machinedrum_SPS1-UW_OS_X.20_C.zip"
 os.execute(("cd '%s' && python3 -c \"import zipfile,os;z=zipfile.ZipFile('%s','w')\nfor r,d,f in os.walk('.'):\n  [z.write(os.path.join(r,x),os.path.join(r,x)[2:]) for x in f]\nz.close()\""):format(zipdir, ZIP))
 local MDX_TREE = [[{"tree":[{"path":"firmware/mdx/X.20/Machinedrum_SPS1-UW_OS_X.20_B.zip","type":"blob"},
 {"path":"firmware/mdx/X.20/Machinedrum_SPS1-UW_OS_X.20_C.zip","type":"blob"},{"path":"firmware/mdx/X.14/Machinedrum_SPS1-UW_OS_X.14.zip","type":"blob"}]}]]
 
+local KB_CATALOG = [[{"schema":"kitbasher.mds-catalog/1","machines":[
+ {"file":"mds/core/TX8/TX8-BD.syx","channel":"core","author":"MDX","summary":"808-style bass drum"},
+ {"file":"mds/community/murdenihcam/SMP-SL.syx","channel":"community","author":"murdenihcam","summary":"slicer"},
+ {"file":"mds/community/samplesandsnacks/rasp/RASP.syx","channel":"community","author":"SamplesAndSnacks","summary":"Blown trill","source":null,"license":"MIT","hardware":"all","notes":"Recategorised \u2013 code changed to PHY-RS."},
+ {"file":"mds/tx6/bd/bd.syx","channel":"community","author":"Kitbasher / Simple606 contributors","summary":"606-style bass drum","license":"MIT","notes":"Version 2.1"}
+]}]]
+
 local WEB = {
+  ["https://raw.githubusercontent.com/etcetc000/kitbasher/main/mds/catalog.json"] = KB_CATALOG,
+  ["https://raw.githubusercontent.com/etcetc000/kitbasher/main/mds/tx6/bd/bd.syx"] = USR_SYX,
   ["https://wftlrd.uk/machinedrum-usr/manifest.json"] = MANIFEST,
   ["https://wftlrd.uk/machinedrum-usr/downloads/D11-CP-v1.0.syx"] = USR_SYX,
   ["https://wftlrd.uk/machinedrum-usr/downloads/D11-BD-v1.0.syx"] = BD_SYX,
@@ -197,6 +207,23 @@ net.get_file = function(url, path)
   if not body then return nil, "404" end
   wr(path, body)
   return true
+end
+
+-- real background runner, checked once, then swapped for a synchronous one so
+-- the virtual clock does not spin while real processes run
+do
+  net.tmpdir = TMP
+  local out
+  clock.run(function() out = net.run("echo hello; echo world") end)
+  run_until(function() return out ~= nil end, 100000)
+  check(out == "hello\nworld\n", "net.run background + marker file")
+  local leftovers = util.scandir(TMP)
+  local stray = false
+  for _, f in ipairs(leftovers) do if f:find("mdusr_run_") then stray = true end end
+  check(not stray, "net.run cleans up temp files")
+end
+net.run = function(cmd)
+  local f = io.popen(cmd, "r"); local s = f:read("a"); f:close(); return s
 end
 
 -------------------------------------------------------------------- unit tests
@@ -261,6 +288,9 @@ local function count_index(id)
   local t = json.decode(f:read("a")); f:close()
   return #t.machines, t
 end
+local logf = io.open(_path.data .. "mdusr/refresh.log")
+local logtxt = logf and logf:read("a") or ""
+check(logtxt:find("wftlrd: ok, 3 machines") and logtxt:find("refresh ok: 7 sources"), "refresh log written: " .. logtxt)
 local n, w = count_index("wftlrd")
 check(n == 3, "wftlrd: 3 machines (got " .. tostring(n) .. ")")
 check(w and w.machines[1].files[1].url == "https://wftlrd.uk/machinedrum-usr/downloads/D11-CP-v1.0.syx", "wftlrd url")
@@ -277,8 +307,14 @@ check(db and db.machines[1].extra[1] and db.machines[1].extra[1]:find("v0.9"), "
 local n4, be = count_index("bento909")
 check(n4 == 2 and be.machines[1].name == "NFX-BO" and be.machines[1].category == "NFX effects", "bento909 machines")
 check(be and be.machines[2].desc == "", "bento909 missing readme -> empty desc")
+local nk, kb = count_index("kitbasher")
+check(nk == 2, "kitbasher: core + community/murdenihcam skipped (got " .. tostring(nk) .. ")")
+check(kb and kb.machines[1].name == "TX6-BD" and kb.machines[1].category == "TX6 (Simple606)", "kitbasher tx6 first")
+check(kb and kb.machines[2].category == "Community: SamplesAndSnacks" and kb.machines[2].desc == "Blown trill", "kitbasher community entry")
+check(kb and kb.machines[1].files[1].url == "https://raw.githubusercontent.com/etcetc000/kitbasher/main/mds/tx6/bd/bd.syx", "kitbasher raw url")
 local n5, mx = count_index("mdx")
 check(n5 == 2, "mdx: firmware image hidden, 2 machines (got " .. tostring(n5) .. ")")
+check(mx and mx.machines[1].category == "MDX bundle", "mdx category")
 check(mx and mx.machines[1].desc == "two-operator FM bass with feedback.", "mdx desc same line: " .. tostring(mx and mx.machines[1].desc))
 check(mx and mx.machines[2].desc == "Karplus plucked string with damping control.", "mdx desc next line: " .. tostring(mx and mx.machines[2].desc))
 
@@ -341,6 +377,8 @@ key(3, 1)
 run_until(function() return #tasks <= 1 end, 600)
 local n6 = count_index("wftlrd")
 check(n6 == 3, "offline refresh keeps cached index")
+logtxt = io.open(_path.data .. "mdusr/refresh.log"):read("a")
+check(logtxt:find("wftlrd: FAILED") and logtxt:find("1 ok, 6 FAILED"), "failure summary logged")
 redraw()
 check(table.concat(drawn, "|"):find("!2 0m"), "error flag shown on source row: " .. table.concat(drawn, "|"))
 offline = false
