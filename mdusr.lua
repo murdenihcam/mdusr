@@ -521,8 +521,85 @@ local function enter_source(s)
   L.sel.cats, L.sel.machines = 1, 1
 end
 
+-- ---------------------------------------------------------------- splash / self-update
+-- On start the script checks its own GitHub repo. When installed with maiden
+-- (;install https://github.com/murdenihcam/mdusr) the folder is a git clone,
+-- so "git fetch" tells how many commits it is behind and "git pull" updates.
+local REPO = "murdenihcam/mdusr"
+local SPL = { active = true, state = "checking", behind = 0, sel = 1, msg = nil, t0 = 0 }
+
+local function script_dir()
+  local p = (norns and norns.state and norns.state.path) or (_path.code .. "mdusr/")
+  if p:sub(-1) ~= "/" then p = p .. "/" end
+  return p
+end
+
+local function splash_items()
+  local items = {}
+  if SPL.state == "behind" then items[#items + 1] = { id = "update", label = ("Update script (%d new)"):format(SPL.behind) } end
+  items[#items + 1] = { id = "refresh", label = "Refresh machine lists" }
+  items[#items + 1] = { id = "go", label = "Continue" }
+  return items
+end
+
+local function check_update()
+  local dir = net.quote(script_dir())
+  local out = net.run(("cd %s && git rev-parse --is-inside-work-tree 2>/dev/null && " ..
+    "timeout 30 git fetch -q origin 2>/dev/null && echo FETCH_OK && " ..
+    "git rev-list --count HEAD..@{u} 2>/dev/null"):format(dir), 60) or ""
+  if not out:find("true", 1, true) then
+    SPL.state = "nogit" -- copied by hand: cannot update in place
+  elseif not out:find("FETCH_OK", 1, true) then
+    SPL.state = "offline"
+  else
+    SPL.behind = tonumber(out:match("FETCH_OK%s+(%d+)")) or 0
+    SPL.state = SPL.behind > 0 and "behind" or "current"
+  end
+  dirty = true
+  -- nothing to decide: leave the splash on its own after a moment
+  if SPL.state ~= "behind" then
+    clock.sleep(1.2)
+    if SPL.state ~= "behind" and SPL.active and SPL.sel == 1 then SPL.active = false end
+  end
+  dirty = true
+end
+
+local function do_update()
+  SPL.state = "updating"
+  dirty = true
+  local out = net.run(("cd %s && git pull --ff-only -q 2>&1 && echo PULL_OK"):format(net.quote(script_dir())), 120) or ""
+  if out:find("PULL_OK", 1, true) then
+    SPL.state, SPL.msg = "updated", "Updated. Reloading..."
+    dirty = true
+    clock.sleep(1)
+    if norns and norns.script and norns.script.load and norns.state and norns.state.script then
+      norns.script.load(norns.state.script)
+    else
+      SPL.msg = "Updated: restart mdusr"
+    end
+  else
+    SPL.state, SPL.msg = "failed", "Update failed (local edits?)"
+    print("mdusr update: " .. out)
+  end
+  dirty = true
+end
+
+local function splash_key(n)
+  if n == 2 then SPL.active = false
+  elseif n == 3 then
+    if SPL.state == "updating" or SPL.state == "checking" then return end
+    local it = splash_items()[SPL.sel]
+    if not it then return end
+    if it.id == "update" then clock.run(do_update)
+    elseif it.id == "refresh" then SPL.active = false; refresh(source_list())
+    else SPL.active = false end
+  end
+  dirty = true
+end
+
 function key(n, z)
   if z == 0 then return end
+  if SPL.active then return splash_key(n) end
   -- global: sending / confirm screens capture keys
   if send.active then
     if n == 2 then send.abort = true; say("aborting...")
@@ -603,6 +680,11 @@ end
 
 function enc(n, d)
   L.confirm_clear = false
+  if SPL.active then
+    if n == 2 then SPL.sel = util.clamp(SPL.sel + d, 1, #splash_items()) end
+    dirty = true
+    return
+  end
   if n == 1 then
     if not send.active and not pending and not B.full then page = util.clamp(page + d, 1, 2) end
     dirty = true
@@ -872,16 +954,39 @@ local function draw_backup()
   screen.text(fit(("cap %d/%dB last:%s"):format(#B.capture, capture_bytes(), B.last), 128))
 end
 
+local function draw_splash()
+  screen.level(15)
+  screen.font_size(16)
+  screen.move(0, 16); screen.text("mdusr")
+  screen.font_size(8)
+  screen.level(5)
+  screen.move(W, 7); screen.text_right("MD USR loader")
+  local status = ({
+    checking = "checking for updates...", current = "up to date",
+    behind = "update available", offline = "update check: offline",
+    nogit = "not a git install: no updates", updating = "updating...",
+  })[SPL.state] or SPL.msg or ""
+  if SPL.msg then status = SPL.msg end
+  screen.level(SPL.state == "behind" and 15 or 8)
+  screen.move(0, 26); screen.text(fit(status, 128))
+  draw_list(splash_items(), SPL.sel, function(it) return it.label end, 36, 3)
+  screen.level(4); screen.move(0, 62); screen.text("K2 skip")
+  screen.move(W, 62); screen.text_right("K3 select")
+end
+
 function redraw()
   screen.clear()
   screen.font_face(1)
   screen.font_size(8)
-  if send.active then draw_send()
+  if SPL.active then draw_splash()
+  elseif send.active then draw_send()
   elseif send.result then draw_result()
   elseif pending then draw_confirm()
   elseif page == 1 then draw_load()
   else draw_backup() end
-  if busy and not send.active and not B.full then
+  if SPL.active then
+    -- splash keeps its own layout
+  elseif busy and not send.active and not B.full then
     screen.level(0); screen.rect(0, 47, W, 9); screen.fill()
     screen.level(12); screen.move(0, 54); screen.text(fit(busy .. "...", 128))
   elseif toast and util.time() < toast_t then
@@ -930,6 +1035,7 @@ function init()
     if #missing > 0 then refresh(missing) end
   end
 
+  clock.run(check_update)
   clock.run(function()
     while true do
       clock.sleep(1 / 15)

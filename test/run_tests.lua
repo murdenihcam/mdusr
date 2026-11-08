@@ -19,7 +19,7 @@ function include(p)
   return modcache[p]
 end
 
-_path = { data = TMP .. "data/" }
+_path = { data = TMP .. "data/", code = TMP .. "code/" }
 os.execute("mkdir -p " .. _path.data)
 
 -- virtual clock / scheduler
@@ -273,6 +273,8 @@ end
 -------------------------------------------------------------------- script tests
 dofile(ROOT .. "/mdusr.lua")
 init()
+redraw()
+check(table.concat(drawn, "|"):find("checking for updates"), "splash shown on start")
 run_until(function() return #fetched > 0 end, 5)
 -- wait for the auto refresh to finish
 local function idle() redraw(); return true end
@@ -527,6 +529,31 @@ key(3, 1)
 check(#json.decode(io.open(_path.data .. "mdusr/collection.json"):read("a")) == 2, "first clear press only asks")
 key(3, 1)
 check(#json.decode(io.open(_path.data .. "mdusr/collection.json"):read("a")) == 0, "second press clears")
+
+-------------------------------------------------------------------- self-update
+do
+  local G = TMP .. "git/"
+  local sh = function(c) return os.execute(c .. " >/dev/null 2>&1") end
+  sh(("rm -rf %s && mkdir -p %s && cd %s && git init -q --bare -b main remote.git && git clone -q remote.git work && cd work && git config user.email t@t && git config user.name t && echo a > f && git add f && git commit -qm one && git push -q origin main"):format(G, G, G))
+  sh(("mkdir -p %scode && cd %scode && git clone -q %sremote.git mdusr"):format(G, G, G))
+  sh(("cd %swork && echo b >> f && git commit -qam two && git push -q origin main"):format(G))
+  _path.code = G .. "code/"
+  tasks = {}
+  dofile(ROOT .. "/mdusr.lua")
+  init()
+  run_until(function() return false end, 3)
+  redraw()
+  local sc = table.concat(drawn, "|")
+  check(sc:find("update available") and sc:find("Update script %(1 new%)"), "splash offers update when behind: " .. sc)
+  key(3, 1)
+  run_until(function() return false end, 3)
+  redraw()
+  check(table.concat(drawn, "|"):find("restart mdusr"), "update pulled")
+  local f = io.open(G .. "code/mdusr/f"):read("a")
+  check(f == "a\nb\n", "working copy updated by git pull")
+  key(2, 1); redraw()
+  check(not table.concat(drawn, "|"):find("checking"), "K2 leaves splash")
+end
 
 print(("%d passed, %d failed"):format(passes, fails))
 os.exit(fails == 0 and 0 or 1)
