@@ -26,6 +26,14 @@ local BACKUPS = DATA .. "backups/"
 local LOCAL = DATA .. "local/"
 
 local md -- midi device
+local md_port = 1
+
+local function port_name()
+  local v = midi.vports[md_port]
+  local n = v and v.name
+  if not n or n == "" or n == "none" then return nil end
+  return n
+end
 local dirty = true
 local page = 1
 local toast, toast_t = nil, 0
@@ -71,10 +79,15 @@ local function load_local_index()
   idx["local"] = { machines = ms, notes = { "Copy .syx files to dust/data/mdusr/local/" }, updated = os.time() }
 end
 
+-- bump when parsing/grouping changes so cached lists are rebuilt on start
+local INDEX_SCHEMA = 2
+
 local function load_cache()
   for _, s in ipairs(sources) do
     local body = read_text(CACHE .. "index_" .. s.id .. ".json")
-    if body then idx[s.id] = json.decode(body) end
+    local t = body and json.decode(body)
+    -- an older list is still shown, but marked stale so start-up refetches it
+    if t then idx[s.id] = t; t.stale = (t.schema ~= INDEX_SCHEMA) or nil end
   end
   load_local_index()
 end
@@ -108,6 +121,7 @@ local function refresh_one(s)
   local ok, res, err = pcall(s.load, make_env(s))
   if ok and res then
     res.updated = os.time()
+    res.schema = INDEX_SCHEMA
     table.sort(res.machines, function(a, b) return (a.sort or 0) < (b.sort or 0) end)
     idx[s.id] = res
     write_text(CACHE .. "index_" .. s.id .. ".json", json.encode(res))
@@ -139,7 +153,10 @@ local function refresh(list)
   -- every source fetches in parallel; the slowest decides the total time
   for _, s in ipairs(list) do
     clock.run(function()
-      if refresh_one(s) then okn = okn + 1 else failn = failn + 1 end
+      -- a crash in one source must never leave the script stuck "busy"
+      local ok, res = pcall(refresh_one, s)
+      if not ok then log(s.name .. ": CRASHED " .. tostring(res)); R.state[s.id] = "fail" end
+      if ok and res then okn = okn + 1 else failn = failn + 1 end
       left = left - 1
     end)
   end
@@ -199,6 +216,7 @@ end
 -- Runs inside a clock coroutine.
 local function send_jobs(jobs)
   if not md then say("no MIDI device"); return false end
+  if not port_name() then say("no device on MIDI port " .. md_port .. ": PARAMS", 4); return false end
   local total = 0
   for _, j in ipairs(jobs) do total = total + j.bytes end
   send.active, send.abort, send.done, send.total, send.result = true, false, 0, total, nil
@@ -300,7 +318,7 @@ local function ensure_local(sid, f)
 end
 
 local function prepare_file(sid, f, back)
-  if busy then return say("busy: " .. busy) end
+  if busy and not R.active then return say("busy: " .. busy) end
   clock.run(function()
     local path, e = ensure_local(sid, f)
     if not path then return say(e, 3) end
@@ -354,7 +372,7 @@ end
 
 local function prepare_collection()
   if #C.items == 0 then return say("collection is empty") end
-  if busy then return say("busy: " .. busy) end
+  if busy and not R.active then return say("busy: " .. busy) end
   clock.run(function()
     local jobs = {}
     for i, it in ipairs(C.items) do
@@ -816,9 +834,9 @@ local function draw_result()
   local what = send.files > 1 and (send.files .. " files") or send.label
   local lines = send.result == "done" and {
     what .. " sent.",
-    "Check the MD screen for",
-    "DSP FULL / MEM FULL /",
-    "BUFFER FULL (try slower).",
+    ("%d B to %s"):format(send.total, port_name() or "?"),
+    "MD shows DSP/MEM FULL or",
+    "BUFFER FULL? try slower.",
   } or { "Transfer stopped.", ("%d of %d files complete."):format(send.sent_files or 0, send.files),
     "The current MD slot may", "hold a partial machine." }
   for i, l in ipairs(lines) do screen.move(0, 10 + i * 9); screen.text(fit(l, 128)) end
@@ -833,13 +851,14 @@ local function draw_confirm()
   if p.back == "files" then
     lines = { "Restore overwrites the", "slots stored in the dump." }
   elseif #p.jobs > 1 then
-    lines = { "MACHINE MGR: pick a slot,", "arm RECV. Then K3.",
+    lines = { "MACHINE MGR: slot, arm RECV.",
       params:get("between") == 2 and "K3 again before each file" or
         ("auto, %.1fs between files"):format(params:get("file_gap") / 1000) }
   else
-    lines = { "On the MD: GLOBAL > FILE >", "MACHINE MGR, pick a slot,", "arm RECV. Then K3." }
+    lines = { "GLOBAL>FILE>MACHINE MGR:", "pick a slot, arm RECV." }
   end
   lines[#lines + 1] = ("%d msg, %d B, ~%ds"):format(p.nmsgs, p.bytes, math.ceil(est_seconds(p)))
+  lines[#lines + 1] = "to " .. md_port .. ": " .. (port_name() or "NO DEVICE (params)")
   local warn = {}
   if p.errors > 0 then warn[#warn + 1] = p.errors .. " broken msg skipped" end
   if not p.elektron then warn[#warn + 1] = "not Elektron SysEx" end
@@ -1002,6 +1021,7 @@ end
 
 -- ---------------------------------------------------------------- init
 local function connect(port)
+  md_port = port
   if md then md.event = nil end
   md = midi.connect(port)
   md.event = on_midi
@@ -1035,7 +1055,9 @@ function init()
   elseif mode == 1 then
     -- fetch any source that has never been fetched (e.g. one added in an update)
     local missing = {}
-    for _, s in ipairs(sources) do if not idx[s.id] then missing[#missing + 1] = s end end
+    for _, s in ipairs(sources) do
+      if not idx[s.id] or idx[s.id].stale then missing[#missing + 1] = s end
+    end
     if #missing > 0 then refresh(missing) end
   end
 

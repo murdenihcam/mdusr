@@ -115,11 +115,11 @@ local USR_SYX = bytes_str({ syx_msg(0x5E, 300, 1), syx_msg(0x5E, 700, 2), syx_ms
 
 local MANIFEST = [[{"date":"2026-11-06","hardwareQualified":false,"target":"MDX with USR support",
  "banks":[{"id":"dr110-quality-bank-v14","title":"DR-110","download":"./downloads/BANK-DR110-v1.0.zip"},
-          {"id":"gamelan-refinement-v3","title":"Digital Gamelan"}],
+          {"id":"gamelan-refinement-v3","title":"Digital Gamelan"},{"id":"machines","title":"Machines"}],
  "machines":[
   {"code":"D11-CP","displayName":"DR110 CP PILOT","description":"Clap — noise bursts.","version":"1.0","bank":"dr110-quality-bank-v14","loadOrder":1,"filename":"D11-CP-v1.0.syx","download":"./downloads/D11-CP-v1.0.syx","bytes":1050},
   {"code":"D11-BD","displayName":"DR110 BD","description":"Bass drum.","version":"1.0","bank":"dr110-quality-bank-v14","loadOrder":2,"download":"./downloads/D11-BD-v1.0.syx"},
-  {"code":"NFX-WA","displayName":"WARP","description":"Warp effect.","version":"1.0","download":"./downloads/NFX-WA-v1.0.syx"},
+  {"code":"NFX-WA","displayName":"WARP","description":"Warp effect.","version":"1.0","bank":"machines","download":"./downloads/NFX-WA-v1.0.syx"},
   {"code":"SYN-FM","displayName":"FM","description":"FM synth.","version":"1.0","bank":null,"download":"./downloads/SYN-FM-v1.0.syx"},
   {"code":"GM-AG","displayName":"GONG AGENG","description":"Large gong with &amp; long tail.","version":"1.0","bank":"gamelan-refinement-v3","loadOrder":1,"download":"./downloads/GM-AG-v1.0.syx"}
  ]}]]
@@ -339,6 +339,7 @@ key(3, 1)                      -- prepare (download)
 run_until(function() return #tasks <= 1 end, 30)
 redraw()
 check(table.concat(drawn, "|"):find("arm RECV"), "confirm screen shows receive reminder")
+check(table.concat(drawn, "|"):find("to 1: MD"), "confirm screen names the MIDI device")
 sent = {}
 key(3, 1)                      -- send
 run_until(function() return #tasks <= 1 end, 60)

@@ -51,13 +51,14 @@ S[#S + 1] = {
     end
     local out = {}
     for _, x in ipairs(m.machines or {}) do
-      -- banked machines stay in their bank; the rest are grouped by name prefix
       local code = tostring(x.code or x.id or "")
-      local cat = banks[x.bank] or (type(x.bank) == "string" and x.bank ~= "" and x.bank)
-      if not cat then
-        if code:match("^NFX%-") then cat = "NFX effects"
-        elseif code:match("^SYN%-") then cat = "Synths"
-        else cat = "Other" end
+      -- NFX-* and SYN-* always get their own categories, whatever bank (e.g. a
+      -- catch-all "Machines" bank) the manifest puts them in
+      local cat
+      if code:match("^NFX%-") then cat = "NFX effects"
+      elseif code:match("^SYN%-") then cat = "Synths"
+      else
+        cat = banks[x.bank] or (type(x.bank) == "string" and x.bank ~= "" and x.bank) or "Other"
       end
       local url = text.resolve(base, x.download) or
         (x.filename and text.resolve(base, "downloads/" .. x.filename))
